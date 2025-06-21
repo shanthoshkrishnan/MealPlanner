@@ -88,7 +88,7 @@ class WhatsAppBot:
     def __init__(self, token: str, phone_number_id: str):
         self.token = token
         self.phone_number_id = phone_number_id
-        self.base_url = f"https://graph.facebook.com/v17.0/{phone_number_id}"
+        self.base_url = f"https://graph.facebook.com/v21.0/{phone_number_id}"  # Updated to newer API version
         
     def send_message(self, to: str, message: str):
         """Send text message to WhatsApp user"""
@@ -107,7 +107,15 @@ class WhatsAppBot:
         }
         
         try:
+            logger.info(f"Sending message to {to} using phone number ID: {self.phone_number_id}")
+            logger.info(f"Request URL: {url}")
+            logger.info(f"Request data: {json.dumps(data, indent=2)}")
+            
             response = requests.post(url, headers=headers, json=data)
+            
+            logger.info(f"Response status: {response.status_code}")
+            logger.info(f"Response body: {response.text}")
+            
             if response.status_code == 200:
                 logger.info(f"Message sent successfully to {to}")
                 return True
@@ -122,7 +130,7 @@ class WhatsAppBot:
         """Download media file from WhatsApp"""
         try:
             # Get media URL
-            url = f"https://graph.facebook.com/v17.0/{media_id}"
+            url = f"https://graph.facebook.com/v21.0/{media_id}"  # Updated API version
             headers = {'Authorization': f'Bearer {self.token}'}
             
             response = requests.get(url, headers=headers)
@@ -149,6 +157,11 @@ class WhatsAppBot:
 # Initialize components
 analyzer = NutritionAnalyzer()
 whatsapp_bot = WhatsAppBot(WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID)
+
+# Log configuration for debugging
+logger.info(f"Bot initialized with Phone Number ID: {WHATSAPP_PHONE_NUMBER_ID}")
+logger.info(f"WhatsApp Token configured: {'Yes' if WHATSAPP_TOKEN else 'No'}")
+logger.info(f"Base URL: https://graph.facebook.com/v21.0/{WHATSAPP_PHONE_NUMBER_ID}")
 
 @app.route('/webhook', methods=['GET'])
 def verify_webhook():
@@ -313,6 +326,35 @@ def health_check():
         'service': 'WhatsApp Nutrition Bot',
         'timestamp': time.time()
     })
+
+@app.route('/test-credentials', methods=['GET'])
+def test_credentials():
+    """Test endpoint to verify WhatsApp credentials"""
+    try:
+        # Test by getting phone number info
+        url = f"https://graph.facebook.com/v21.0/{WHATSAPP_PHONE_NUMBER_ID}"
+        headers = {'Authorization': f'Bearer {WHATSAPP_TOKEN}'}
+        
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            data = response.json()
+            return jsonify({
+                'status': 'success',
+                'message': 'Credentials are valid',
+                'phone_number_info': data
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': 'Invalid credentials',
+                'error_code': response.status_code,
+                'error_details': response.text
+            }), 400
+            
+    except Exception as e:
+        logger.error(f"Credential test error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/test-message', methods=['POST'])
 def test_message():
