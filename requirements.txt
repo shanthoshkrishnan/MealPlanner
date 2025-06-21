@@ -1,22 +1,8 @@
-# Flask web framework
 Flask==2.3.3
 Werkzeug==2.3.7
-
-# Google Generative AI (Gemini)
-google-generativeai==0.3.2
-
-# Image processing
+google-generativeai==0.2.2  # more stable for now
 Pillow==10.0.1
-
-# HTTP requests
 requests==2.31.0
-
-# Additional dependencies that might be needed
 python-dotenv==1.0.0
 gunicorn==21.2.0
-
-# Optional: For better logging and monitoring
 colorlog==6.7.0
-
-# Optional: For production deployment
-gevent==23.7.0
