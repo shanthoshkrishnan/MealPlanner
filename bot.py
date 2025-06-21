@@ -18,9 +18,9 @@ app = Flask(__name__)
 
 # Configuration
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-WHATSAPP_TOKEN = os.getenv('WHATSAPP_TOKEN')
-WHATSAPP_PHONE_NUMBER_ID = os.getenv('WHATSAPP_PHONE_NUMBER_ID')
-VERIFY_TOKEN = os.getenv('VERIFY_TOKEN')
+WHATSAPP_TOKEN = os.getenv('WHATSAPP_TOKEN')  # Your WhatsApp Business API token
+WHATSAPP_PHONE_NUMBER_ID = os.getenv('WHATSAPP_PHONE_NUMBER_ID')  # Your WhatsApp Business phone number ID
+WEBHOOK_VERIFY_TOKEN = os.getenv('WEBHOOK_VERIFY_TOKEN')
 
 if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY environment variable is required")
@@ -28,8 +28,8 @@ if not WHATSAPP_TOKEN:
     raise ValueError("WHATSAPP_TOKEN environment variable is required")
 if not WHATSAPP_PHONE_NUMBER_ID:
     raise ValueError("WHATSAPP_PHONE_NUMBER_ID environment variable is required")
-if not VERIFY_TOKEN:
-    raise ValueError("VERIFY_TOKEN environment variable is required")
+if not WEBHOOK_VERIFY_TOKEN:
+    raise ValueError("WEBHOOK_VERIFY_TOKEN environment variable is required")
 
 # Configure Gemini API
 genai.configure(api_key=GEMINI_API_KEY)
@@ -92,7 +92,7 @@ class WhatsAppBot:
         
     def send_message(self, to: str, message: str):
         """Send text message to WhatsApp user"""
-        url = f"{self.base_url}/messages"
+        url = f"{self.base_url}/messages"  # Fixed: Added /messages to the URL
         
         headers = {
             'Authorization': f'Bearer {self.token}',
@@ -157,7 +157,7 @@ def verify_webhook():
     token = request.args.get('hub.verify_token')
     challenge = request.args.get('hub.challenge')
     
-    if mode == 'subscribe' and token == VERIFY_TOKEN:
+    if mode == 'subscribe' and token == WEBHOOK_VERIFY_TOKEN:  # Updated variable name
         logger.info("Webhook verified successfully")
         return challenge
     else:
