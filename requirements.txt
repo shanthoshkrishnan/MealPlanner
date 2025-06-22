@@ -6,3 +6,5 @@ requests
 python-dotenv
 gunicorn
 colorlog
+boto3
+psycopg2
