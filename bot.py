@@ -80,7 +80,7 @@ class DatabaseManager:
     def __init__(self):
         self.database_url = DATABASE_URL
         self.init_database()
-        self.migrate_add_user_id_column()
+        self.migrate_database_schema()
     
     def get_connection(self):
         """Get database connection"""
@@ -114,8 +114,15 @@ class DatabaseManager:
               """)
             except Exception:
                 pass  # Column might not exist
+
+            try:
+                cursor.execute("ALTER TABLE users DROP COLUMN IF EXISTS address;")
+                cursor.execute("ALTER TABLE users DROP COLUMN IF EXISTS email;")
+            except Exception:
+                pass
             
             # Create nutrition_analysis table (only user_id, no phone_number)
+            cursor.execute("DROP TABLE IF EXISTS nutrition_analysis;")
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS nutrition_analysis (
                     id SERIAL PRIMARY KEY,
@@ -188,7 +195,13 @@ class DatabaseManager:
                     preferred_language = EXCLUDED.preferred_language,
                     registration_status = 'completed',
                     updated_at = CURRENT_TIMESTAMP
+                RETURNING user_id
             """, (phone_number, name, language))
+
+            result = cursor.fetchone()
+            if result:
+                user_id = result[0]
+                logger.info(f"User created/updated with user_id: {user_id}")
             
             conn.commit()
             cursor.close()
@@ -374,36 +387,96 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error cleaning up old sessions: {e}")
 
-    def migrate_add_user_id_column(self):
-        """Add user_id column to existing users table if it doesn't exist"""
+    def migrate_database_schema(self):
+        """Migrate database schema to fix user_id issues"""
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
         
-            # Check if user_id column exists
+            # Check if users table exists and has correct structure
             cursor.execute("""
-                SELECT column_name FROM information_schema.columns 
-                WHERE table_name = 'users' AND column_name = 'user_id'
+                SELECT column_name, data_type, is_nullable
+                FROM information_schema.columns 
+                WHERE table_name = 'users'
+                ORDER BY ordinal_position;
             """)
         
-            if not cursor.fetchone():
-                # Add user_id column 
-                cursor.execute("ALTER TABLE users ADD COLUMN user_id SERIAL PRIMARY KEY;")
-                logger.info("Added user_id column to users table")
-
+            existing_columns = cursor.fetchall()
+        
+            # If users table doesn't have user_id as primary key, recreate it
+            has_user_id_pk = False
+            for col in existing_columns:
+                if col[0] == 'user_id':
+                    # Check if it's primary key
+                    cursor.execute("""
+                        SELECT tc.constraint_name
+                        FROM information_schema.table_constraints tc
+                        JOIN information_schema.key_column_usage kcu
+                        ON tc.constraint_name = kcu.constraint_name
+                        WHERE tc.table_name = 'users' 
+                        AND tc.constraint_type = 'PRIMARY KEY'
+                        AND kcu.column_name = 'user_id';
+                    """)
+                    if cursor.fetchone():
+                        has_user_id_pk = True
+                    break
+        
+            if not has_user_id_pk:
+                logger.info("Recreating users table with proper schema...")
+            
+                # Backup existing data
+                cursor.execute("SELECT * FROM users;")
+                existing_users = cursor.fetchall()
+            
+                # Drop and recreate users table
+                cursor.execute("DROP TABLE IF EXISTS nutrition_analysis;")
+                cursor.execute("DROP TABLE IF EXISTS users;")
+            
+                # Create new users table with proper schema
+                cursor.execute("""
+                    CREATE TABLE users (
+                    user_id SERIAL PRIMARY KEY,
+                    phone_number VARCHAR(20) UNIQUE NOT NULL,
+                    name VARCHAR(100),
+                    preferred_language VARCHAR(10) DEFAULT 'en',
+                    registration_status VARCHAR(20) DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+                """)
+            
+                # Restore data (excluding address and email if they existed)
+                for user in existing_users:
+                    cursor.execute("""
+                        INSERT INTO users (phone_number, name, preferred_language, registration_status, created_at, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                    """, (user[1], user[2], user[3], user[4], user[5], user[6]))  # Adjust indices based on your schema
+            
+                # Recreate nutrition_analysis table
+                cursor.execute("""
+                    CREATE TABLE nutrition_analysis (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+                    file_location TEXT NOT NULL,
+                    analysis_result TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+                """)
+            
+                logger.info("Database schema migration completed")
+        
+            # Remove address column if it exists
             try:
                 cursor.execute("ALTER TABLE users DROP COLUMN IF EXISTS address;")
                 cursor.execute("ALTER TABLE users DROP COLUMN IF EXISTS email;")
-                logger.info("Removed address and email columns from users table")
-            except Exception as e:
-                logger.warning(f"Could not remove address/email columns: {e}")
+            except Exception:
+                pass
         
             conn.commit()
             cursor.close()
             conn.close()
         
         except Exception as e:
-            logger.error(f"Error migrating user_id column: {e}")
+            logger.error(f"Database migration error: {e}")
+        
 
 # Updated S3Manager class with simplified file paths
 class S3Manager:
@@ -789,6 +862,12 @@ def handle_image_message(message: Dict[str, Any]):
             db_manager.update_registration_session(sender, 'name', {})
             return
         
+        if 'user_id' not in user or user['user_id'] is None:
+            logger.error(f"User {sender} does not have user_id: {user}")
+            error_message = "❌ User registration incomplete. Please type 'start' to re-register."
+            whatsapp_bot.send_message(sender, error_message)
+            return
+        
         user_language = user.get('preferred_language', 'en')
         
         # Send analysis started message
@@ -810,24 +889,21 @@ def handle_image_message(message: Dict[str, Any]):
             
             # Convert bytes to PIL Image for analysis
             image = Image.open(io.BytesIO(image_bytes))
+
             
             # Analyze image
             analysis_result = analyzer.analyze_image(image, user_language)
-            
-            if 'user_id' not in user or user['user_id'] is None:
-                logger.error(f"User {sender} does not have user_id")
-                error_message = "❌ User registration incomplete. Please type 'start' to re-register."
-                whatsapp_bot.send_message(sender, error_message)
-                return
 
-            # Save analysis to database
-            db_manager.save_nutrition_analysis(
+            success = db_manager.save_nutrition_analysis(
                 user['user_id'], 
                 file_location, 
                 analysis_result
             )
             
+            if not success:
+                logger.error(f"Failed to save nutrition analysis for user {user['user_id']}")
             # Send analysis result
+
             whatsapp_bot.send_message(sender, analysis_result)
             
             # Send follow-up message
