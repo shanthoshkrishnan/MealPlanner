@@ -452,7 +452,7 @@ class LanguageManager:
                 'welcome': "👋 Hello! I'm your AI Nutrition Analyzer bot!\n\n📸 Send me a photo of any food and I'll provide:\n• Detailed nutritional information\n• Calorie count and macros\n• Health analysis and tips\n• Improvement suggestions\n\nJust take a clear photo of your meal and send it to me! 🍽️",
                 'registration_name': "Welcome! I need to collect some basic information from you.\n\n📝 Please enter your full name:",
                 'registration_address': "Thank you! Now please enter your address:",
-                'registration_language': get_registration_language_message(),  # Updated to use full names
+                'registration_language': self.get_registration_language_message(),  # Updated to use full names
                 'registration_complete': "✅ Registration completed successfully! You can now send me food photos for nutrition analysis.",
                 'analyzing': "🔍 Analyzing your food image... This may take a few moments.",
                 'help': "🆘 **How to use this bot:**\n\n1. Take a clear photo of your food\n2. Send the image to me\n3. Wait for the analysis (usually 10-30 seconds)\n4. Get detailed nutrition information!\n\n**Tips for best results:**\n• Take photos in good lighting\n• Show the food clearly from above\n• Include the whole serving if possible\n• One dish per photo works best\n\n**Language Commands:**\n• Type 'language' to change your preferred language\n• Use full names like 'English', 'Tamil', 'Hindi'\n\nSend me a food photo to get started! 📸"
@@ -485,6 +485,22 @@ class LanguageManager:
         
         return "🌍 **Please select your preferred language:**\n\n" + "\n".join(options) + "\n\n💬 **Reply with the full language name** (e.g., English, Tamil, Hindi)"
     
+    def get_registration_language_message() -> str:
+        """Get language selection message for registration with full names"""
+        return """Great! Please select your preferred language for nutrition analysis:
+
+🌍 **Available Languages:**
+• **English**
+• **Tamil** (தமிழ்)
+• **Telugu** (తెలుగు)
+• **Hindi** (हिन्दी)
+• **Kannada** (ಕನ್ನಡ)
+• **Malayalam** (മലയാളം)
+• **Marathi** (मराठी)
+• **Gujarati** (ગુજરાતી)
+• **Bengali** (বাংলা)
+
+💬 Reply with the full language name (e.g., 'English', 'Tamil', 'Hindi')"""
     
 
 class NutritionAnalyzer:
@@ -915,23 +931,6 @@ def handle_registration_flow(sender: str, text_content: str):
             whatsapp_bot.send_message(sender, welcome_msg)
         else:
             whatsapp_bot.send_message(sender, "❌ Registration failed. Please try again later.")
-
-def get_registration_language_message() -> str:
-    """Get language selection message for registration with full names"""
-    return """Great! Please select your preferred language for nutrition analysis:
-
-🌍 **Available Languages:**
-• **English**
-• **Tamil** (தமிழ்)
-• **Telugu** (తెలుగు)
-• **Hindi** (हिन्दी)
-• **Kannada** (ಕನ್ನಡ)
-• **Malayalam** (മലയാളം)
-• **Marathi** (मराठी)
-• **Gujarati** (ગુજરાતી)
-• **Bengali** (বাংলা)
-
-💬 Reply with the full language name (e.g., 'English', 'Tamil', 'Hindi')"""
 
 def handle_language_change_request(sender: str, current_language: str):
     """Enhanced language change request with current language context using full names"""
