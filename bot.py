@@ -244,6 +244,29 @@ class DatabaseManager:
             logger.error(f"Error updating registration session: {e}")
             return False
     
+    def update_user_language(self, user_id: int, language: str) -> bool:
+        """Update user's preferred language"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                UPDATE users 
+                SET preferred_language = %s, updated_at = CURRENT_TIMESTAMP 
+                WHERE user_id = %s
+            """, (language, user_id))
+            
+            updated_rows = cursor.rowcount
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            return updated_rows > 0
+            
+        except Exception as e:
+            logger.error(f"Error updating user language: {e}")
+            return False
+    
     def delete_registration_session(self, phone_number: str) -> bool:
         """Delete registration session"""
         try:
@@ -469,28 +492,7 @@ class LanguageManager:
         
         return "🌍 *Please select your preferred language:*\n\n" + "\n".join(options) + "\n\n💬 *Reply with the language code* (e.g., EN, TA, HI)"
     
-    def update_user_language(self, user_id: int, language: str) -> bool:
-        """Update user's preferred language"""
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            
-            cursor.execute("""
-                UPDATE users 
-                SET preferred_language = %s, updated_at = CURRENT_TIMESTAMP 
-                WHERE user_id = %s
-            """, (language, user_id))
-            
-            updated_rows = cursor.rowcount
-            conn.commit()
-            cursor.close()
-            conn.close()
-            
-            return updated_rows > 0
-            
-        except Exception as e:
-            logger.error(f"Error updating user language: {e}")
-            return False
+    
 
 class NutritionAnalyzer:
     def __init__(self):
