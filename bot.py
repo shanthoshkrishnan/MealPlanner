@@ -16,6 +16,7 @@ from botocore.exceptions import ClientError
 from datetime import datetime
 import re
 from urllib.parse import urlparse
+from dotenv import load_dotenv
 
 # Configure logging
 logging.basicConfig(
@@ -25,6 +26,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+load_dotenv()
 
 # Configuration with validation
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
@@ -485,7 +487,7 @@ class LanguageManager:
         
         return "🌍 **Please select your preferred language:**\n\n" + "\n".join(options) + "\n\n💬 **Reply with the full language name** (e.g., English, Tamil, Hindi)"
     
-    def get_registration_language_message() -> str:
+    def get_registration_language_message(self) -> str:
         """Get language selection message for registration with full names"""
         return """Great! Please select your preferred language for nutrition analysis:
 
@@ -897,7 +899,7 @@ def handle_registration_flow(sender: str, text_content: str):
             return
             
         temp_data['address'] = text_content
-        language_msg = get_registration_language_message()
+        language_msg = LanguageManager.get_registration_language_message()
         whatsapp_bot.send_message(sender, language_msg)
         db_manager.update_registration_session(sender, 'language', temp_data)
         
@@ -931,6 +933,8 @@ def handle_registration_flow(sender: str, text_content: str):
             whatsapp_bot.send_message(sender, welcome_msg)
         else:
             whatsapp_bot.send_message(sender, "❌ Registration failed. Please try again later.")
+
+
 
 def handle_language_change_request(sender: str, current_language: str):
     """Enhanced language change request with current language context using full names"""
