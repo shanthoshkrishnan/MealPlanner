@@ -16,6 +16,8 @@ from botocore.exceptions import ClientError
 from datetime import datetime
 import re
 from urllib.parse import urlparse
+from typing import List, Dict, Optional, Tuple, Any
+
 
 # Configure logging
 logging.basicConfig(
