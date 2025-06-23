@@ -75,7 +75,7 @@ try:
 except Exception as e:
     logger.error(f"Failed to configure AWS S3: {e}")
     raise
-# Updated DatabaseManager class with simplified schema (no address)
+
 class DatabaseManager:
     def __init__(self):
         self.database_url = DATABASE_URL
@@ -602,17 +602,27 @@ class NutritionAnalyzer:
     def analyze_image(self, image: Image.Image, language: str = 'en') -> str:
         """Analyze food image and return nutrition information in specified language"""
         
-        language_prompts = {
-            'en': "Analyze this food image and provide detailed nutritional information in English.",
-            'ta': "இந்த உணவு படத்தை பகுப்பாய்வு செய்து தமிழில் விரிவான ஊட்டச்சத்து தகவல்களை வழங்கவும்.",
-            'te': "ఈ ఆహార చిత్రాన్ని విశ్లేషించి తెలుగులో వివరణాత్మక పోషకాహార సమాచారాన్ని అందించండి.",
-            'hi': "इस भोजन की छवि का विश्लेषण करें और हिंदी में विस्तृत पोषण संबंधी जानकारी प्रदान करें।",
-            'kn': "ಈ ಆಹಾರ ಚಿತ್ರವನ್ನು ವಿಶ್ಲೇಷಿಸಿ ಮತ್ತು ಕನ್ನಡದಲ್ಲಿ ವಿವರವಾದ ಪೋಷಣೆ ಮಾಹಿತಿಯನ್ನು ಒದಗಿಸಿ।",
-            'ml': "ഈ ഭക്ഷണ ചിത്രം വിശകലനം ചെയ്യുകയും മലയാളത്തിൽ വിശദമായ പോഷകാഹാര വിവരങ്ങൾ നൽകുകയും ചെയ്യുക।"
+        # Language-specific instructions for Gemini
+        language_instructions = {
+            'en': "Please respond in English.",
+            'ta': "Please respond in Tamil language (தமிழ் மொழியில் பதிலளிக்கவும்). Write everything in Tamil script.",
+            'te': "Please respond in Telugu language (తెలుగు భాషలో సమాధానం ఇవ్వండి). Write everything in Telugu script.",
+            'hi': "Please respond in Hindi language (हिंदी भाषा में उत्तर दें). Write everything in Hindi script.",
+            'kn': "Please respond in Kannada language (ಕನ್ನಡ ಭಾಷೆಯಲ್ಲಿ ಉತ್ತರಿಸಿ). Write everything in Kannada script.",
+            'ml': "Please respond in Malayalam language (മലയാളം ഭാഷയിൽ ഉത്തരം നൽകുക). Write everything in Malayalam script.",
+            'mr': "Please respond in Marathi language (मराठी भाषेत उत्तर द्या). Write everything in Marathi script.",
+            'gu': "Please respond in Gujarati language (ગુજરાતી ભાષામાં જવાબ આપો). Write everything in Gujarati script.",
+            'bn': "Please respond in Bengali language (বাংলা ভাষায় উত্তর দিন). Write everything in Bengali script."
         }
         
-        base_prompt = """
-        Please provide a clear, easy-to-read response with the following information:
+        # Get language instruction
+        language_instruction = language_instructions.get(language, language_instructions['en'])
+        
+        # Universal prompt structure that works in any language
+        base_prompt = f"""
+        {language_instruction}
+
+        Analyze this food image and provide detailed nutritional information with the following structure:
 
         🍽️ **DISH IDENTIFICATION**
         - Name and description of the dish
@@ -641,20 +651,35 @@ class NutritionAnalyzer:
         - Potential allergens
         - Suitable for: Vegetarian/Vegan/Gluten-free/etc.
 
-        Please format your response in a clear, conversational way that's easy to read on a mobile device.
-        If you cannot clearly identify the food, please indicate this and provide your best assessment.
+        IMPORTANT: 
+        - Respond completely in the requested language ({language_instruction.split()[3] if 'in ' in language_instruction else 'English'})
+        - Use native script and vocabulary
+        - Keep the emoji structure but translate all text content
+        - Format your response clearly for mobile reading
+        - If you cannot identify the food clearly, indicate this in the requested language
         """
         
-        language_instruction = language_prompts.get(language, language_prompts['en'])
-        full_prompt = f"{language_instruction}\n\n{base_prompt}"
-        
         try:
-            response = self.model.generate_content([full_prompt, image])
+            response = self.model.generate_content([base_prompt, image])
             return response.text.strip()
             
         except Exception as e:
             logger.error(f"Gemini analysis error: {e}")
-            return f"❌ Sorry, I couldn't analyze this image. Please try again with a clearer photo of your food."
+            
+            # Return error message in user's preferred language
+            error_messages = {
+                'en': "❌ Sorry, I couldn't analyze this image. Please try again with a clearer photo of your food.",
+                'ta': "❌ மன்னிக்கவும், இந்த படத்தை பகுப்பாய்வு செய்ய முடியவில்லை. உங்கள் உணவின் தெளிவான புகைப்படத்துடன் மீண்டும் முயற்சிக்கவும்.",
+                'te': "❌ క్షమించండి, ఈ చిత్రాన్ని విశ్లేషించలేకపోయాను. దయచేసి మీ ఆహారం యొక్క స్పష్టమైన ఫోటోతో మళ్లీ ప్రయత్నించండి.",
+                'hi': "❌ खुशी है, मैं इस छवि का विश्लेषण नहीं कर सका। कृपया अपने भोजन की स्पष्ट तस्वीर के साथ पुनः प्रयास करें।",
+                'kn': "❌ ಕ್ಷಮಿಸಿ, ನಾನು ಈ ಚಿತ್ರವನ್ನು ವಿಶ್ಲೇಷಿಸಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ. ದಯವಿಟ್ಟು ನಿಮ್ಮ ಆಹಾರದ ಸ್ಪಷ್ಟ ಫೋಟೋದೊಂದಿಗೆ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.",
+                'ml': "❌ ക്ഷമിക്കണം, ഈ ചിത്രം വിശകലനം ചെയ്യാൻ എനിക്ക് കഴിഞ്ഞില്ല. ദയവായി നിങ്ങളുടെ ഭക്ഷണത്തിന്റെ വ്യക്തമായ ഫോട്ടോ ഉപയോഗിച്ച് വീണ്ടും ശ്രമിക്കുക.",
+                'mr': "❌ माफ करा, मी या प्रतिमेचे विश्लेषण करू शकलो नाही. कृपया आपल्या अन्नाच्या स्पष्ट फोटोसह पुन्हा प्रयत्न करा.",
+                'gu': "❌ માફ કરશો, હું આ છબીનું વિશ્લેષણ કરી શક્યો નથી. કૃપા કરીને તમારા ખોરાકના સ્પષ્ટ ફોટો સાથે ફરીથી પ્રયાસ કરો.",
+                'bn': "❌ দুঃখিত, আমি এই ছবিটি বিশ্লেষণ করতে পারিনি। দয়া করে আপনার খাবারের স্পষ্ট ফটো দিয়ে আবার চেষ্টা করুন।"
+            }
+            
+            return error_messages.get(language, error_messages['en'])
 
 class WhatsAppBot:
     def __init__(self, token: str, phone_number_id: str):
