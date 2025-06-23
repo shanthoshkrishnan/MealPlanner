@@ -441,7 +441,7 @@ class LanguageManager:
             'te': 'Telugu (తెలుగు)',
             'hi': 'Hindi (हिन्दी)',
             'kn': 'Kannada (ಕನ್ನಡ)',
-            'ml': 'Malayalam (മലയാളം)',
+            'ml': 'Malayalam (മലയാளം)',
             'mr': 'Marathi (मराठी)',
             'gu': 'Gujarati (ગુજરાતી)',
             'bn': 'Bengali (বাংলা)'
@@ -452,27 +452,20 @@ class LanguageManager:
                 'welcome': "👋 Hello! I'm your AI Nutrition Analyzer bot!\n\n📸 Send me a photo of any food and I'll provide:\n• Detailed nutritional information\n• Calorie count and macros\n• Health analysis and tips\n• Improvement suggestions\n\nJust take a clear photo of your meal and send it to me! 🍽️",
                 'registration_name': "Welcome! I need to collect some basic information from you.\n\n📝 Please enter your full name:",
                 'registration_address': "Thank you! Now please enter your address:",
-                'registration_language': "Great! Please select your preferred language for nutrition analysis:\n\n" + "\n".join([f"{code.upper()}. {name}" for code, name in [
-                    ('en', 'English'),
-                    ('ta', 'Tamil (தமிழ்)'),
-                    ('te', 'Telugu (తెలుగు)'),
-                    ('hi', 'Hindi (हिन्दी)'),
-                    ('kn', 'Kannada (ಕನ್ನಡ)'),
-                    ('ml', 'Malayalam (മലയാളം)')
-                ]]) + "\n\nReply with the language code (e.g., 'EN' for English, 'TA' for Tamil)",
+                'registration_language': get_registration_language_message(),  # Updated to use full names
                 'registration_complete': "✅ Registration completed successfully! You can now send me food photos for nutrition analysis.",
                 'analyzing': "🔍 Analyzing your food image... This may take a few moments.",
-                'help': "🆘 **How to use this bot:**\n\n1. Take a clear photo of your food\n2. Send the image to me\n3. Wait for the analysis (usually 10-30 seconds)\n4. Get detailed nutrition information!\n\n**Tips for best results:**\n• Take photos in good lighting\n• Show the food clearly from above\n• Include the whole serving if possible\n• One dish per photo works best\n\nSend me a food photo to get started! 📸"
+                'help': "🆘 **How to use this bot:**\n\n1. Take a clear photo of your food\n2. Send the image to me\n3. Wait for the analysis (usually 10-30 seconds)\n4. Get detailed nutrition information!\n\n**Tips for best results:**\n• Take photos in good lighting\n• Show the food clearly from above\n• Include the whole serving if possible\n• One dish per photo works best\n\n**Language Commands:**\n• Type 'language' to change your preferred language\n• Use full names like 'English', 'Tamil', 'Hindi'\n\nSend me a food photo to get started! 📸"
             },
             'ta': {
                 'welcome': "👋 வணக்கம்! நான் உங்கள் AI ஊட்டச்சத்து பகுப்பாய்வு பாட்!\n\n📸 எந்த உணவின் புகைப்படத்தையும் அனுப்புங்கள், நான் வழங்குவேன்:\n• விரிவான ஊட்டச்சத்து தகவல்\n• கலோரி எண்ணிக்கை மற்றும் மேக்ரோக்கள்\n• ஆரோக்கிய பகுப்பாய்வு மற்றும் குறிப்புகள்\n• மேம்படுத்தும் பரிந்துரைகள்\n\nஉங்கள் உணவின் தெளிவான புகைப்படத்தை எடுத்து அனுப்புங்கள! 🍽️",
                 'analyzing': "🔍 உங்கள் உணவு படத்தை பகுப்பாய்வு செய்கிறேன்... இதற்கு சில நிமிடங்கள் ஆகலாம்.",
-                'help': "🆘 **இந்த பாட்டை எப்படி பயன்படுத்துவது:**\n\n1. உங்கள் உணவின் தெளிவான புகைப்படத்தை எடுங்கள்\n2. படத்தை எனக்கு அனுப்புங்கள்\n3. பகுப்பாய்விற்காக காத்திருங்கள்\n4. விரிவான ஊட்டச்சத்து தகவலைப் பெறுங்கள்!\n\nதொடங்க எனக்கு உணவு புகைப்படம் ஒன்றை அனுப்புங்கள்! 📸"
+                'help': "🆘 **இந்த பாட்டை எப்படி பயன்படுத்துவது:**\n\n1. உங்கள் உணவின் தெளிவான புகைப்படத்தை எடுங்கள்\n2. படத்தை எனக்கு அனுப்புங்கள்\n3. பகுப்பாய்விற்காக காத்திருங்கள்\n4. விரிவான ஊட்டச்சத்து தகவலைப் பெறுங்கள்!\n\n**மொழி கட்டளைகள்:**\n• மொழி மாற்ற 'language' என்று தட்டச்சு செய்யவும்\n• 'Tamil', 'English' போன்ற முழு பெயர்களைப் பயன்படுத்தவும்\n\nதொடங்க எனக்கு உணவு புகைப்படம் ஒன்றை அனுப்புங்கள்! 📸"
             },
             'hi': {
                 'welcome': "👋 नमस्ते! मैं आपका AI पोषण विश्लेषक बॉट हूँ!\n\n📸 मुझे किसी भी खाने की फोटो भेजें और मैं प्रदान करूंगा:\n• विस्तृत पोषण संबंधी जानकारी\n• कैलोरी गिनती और मैक्रोज़\n• स्वास्थ्य विश्लेषण और सुझाव\n• सुधार के सुझाव\n\nबस अपने भोजन की एक स्पष्ट तस्वीर लें और मुझे भेज दें! 🍽️",
                 'analyzing': "🔍 आपकी खाने की तस्वीर का विश्लेषण कर रहा हूँ... इसमें कुछ समय लग सकता है।",
-                'help': "🆘 **इस बॉट का उपयोग कैसे करें:**\n\n1. अपने खाने की स्पष्ट तस्वीर लें\n2. तस्वीर मुझे भेजें\n3. विश्लेषण का इंतजार करें\n4. विस्तृत पोषण जानकारी प्राप्त करें!\n\nशुरू करने के लिए मुझे खाने की तस्वीर भेजें! 📸"
+                'help': "🆘 **इस बॉट का उपयोग कैसे करें:**\n\n1. अपने खाने की स्पष्ट तस्वीर लें\n2. तस्वीर मुझे भेजें\n3. विश्लेषण का इंतजार करें\n4. विस्तृत पोषण जानकारी प्राप्त करें!\n\n**भाषा कमांड:**\n• भाषा बदलने के लिए 'language' टाइप करें\n• 'Hindi', 'English' जैसे पूरे नाम का उपयोग करें\n\nशुरू करने के लिए मुझे खाने की तस्वीर भेजें! 📸"
             }
         }
     
@@ -485,12 +478,12 @@ class LanguageManager:
         return self.languages.get(code, 'English')
 
     def get_language_options_text(self) -> str:
-        """Get formatted language options for user selection"""
+        """Get formatted language options for user selection using full names"""
         options = []
         for code, name in self.languages.items():
-            options.append(f"*{code.upper()}* - {name}")
+            options.append(f"• **{name.split(' (')[0]}**")  # Remove script part for cleaner display
         
-        return "🌍 *Please select your preferred language:*\n\n" + "\n".join(options) + "\n\n💬 *Reply with the language code* (e.g., EN, TA, HI)"
+        return "🌍 **Please select your preferred language:**\n\n" + "\n".join(options) + "\n\n💬 **Reply with the full language name** (e.g., English, Tamil, Hindi)"
     
     
 
@@ -750,24 +743,87 @@ def handle_text_message(message: Dict[str, Any]):
     elif text_lower in ['language', 'change language', 'lang', 'भाषा', 'மொழி', 'భాష']:
         handle_language_change_request(sender, user_language)
         
-    # Enhanced language change detection
+    # Enhanced language change detection - now using full names
     elif (text_lower.startswith('lang:') or text_lower.startswith('language:') or 
           text_lower.startswith('set lang') or text_lower.startswith('change to')):
-        # Extract language code from various formats
-        lang_code = extract_language_code(text_content)
+        # Extract language name from various formats
+        lang_code = extract_language_from_text(text_content)
         if lang_code:
             handle_language_update(sender, user_id, lang_code)
         else:
             handle_language_change_request(sender, user_language)
     
-    # Direct language code detection (EN, TA, HI, etc.)
-    elif text_lower in ['en', 'ta', 'te', 'hi', 'kn', 'ml', 'mr', 'gu', 'bn']:
-        handle_language_update(sender, user_id, text_lower)
+    # Direct language name detection (English, Tamil, Hindi, etc.)
+    elif detect_language_name(text_lower):
+        lang_code = detect_language_name(text_lower)
+        handle_language_update(sender, user_id, lang_code)
         
     else:
         # Default response for unrecognized text
         welcome_message = language_manager.get_message(user_language, 'welcome')
         whatsapp_bot.send_message(sender, welcome_message)
+
+def detect_language_name(text: str) -> Optional[str]:
+    """Detect language name from text and return language code"""
+    text_lower = text.lower().strip()
+    
+    # Language name mappings
+    language_mappings = {
+        # English variations
+        'english': 'en',
+        'eng': 'en',
+        
+        # Tamil variations
+        'tamil': 'ta',
+        'தமிழ்': 'ta',
+        'tamizh': 'ta',
+        
+        # Telugu variations
+        'telugu': 'te',
+        'తెలుగు': 'te',
+        
+        # Hindi variations
+        'hindi': 'hi',
+        'हिन्दी': 'hi',
+        'हिंदी': 'hi',
+        
+        # Kannada variations
+        'kannada': 'kn',
+        'ಕನ್ನಡ': 'kn',
+        
+        # Malayalam variations
+        'malayalam': 'ml',
+        'മലയാളം': 'ml',
+        
+        # Marathi variations
+        'marathi': 'mr',
+        'मराठी': 'mr',
+        
+        # Gujarati variations
+        'gujarati': 'gu',
+        'ગુજરાતી': 'gu',
+        
+        # Bengali variations
+        'bengali': 'bn',
+        'বাংলা': 'bn',
+        'bangla': 'bn'
+    }
+    
+    return language_mappings.get(text_lower)
+
+def extract_language_from_text(text: str) -> Optional[str]:
+    """Extract language code from various text formats using full names"""
+    text_lower = text.lower().strip()
+    
+    # Remove prefixes to get just the language name
+    prefixes = ['lang:', 'language:', 'set lang ', 'change to ', 'switch to ']
+    
+    for prefix in prefixes:
+        if text_lower.startswith(prefix):
+            lang_name = text_lower[len(prefix):].strip()
+            return detect_language_name(lang_name)
+    
+    return None
 
 def extract_language_code(text: str) -> Optional[str]:
     """Extract language code from various text formats"""
@@ -794,7 +850,7 @@ def extract_language_code(text: str) -> Optional[str]:
 
 
 def handle_registration_flow(sender: str, text_content: str):
-    """Handle user registration process"""
+    """Handle user registration process - updated for full language names"""
     session = db_manager.get_registration_session(sender)
     
     if not session:
@@ -825,19 +881,18 @@ def handle_registration_flow(sender: str, text_content: str):
             return
             
         temp_data['address'] = text_content
-        language_msg = language_manager.get_message('en', 'registration_language')
+        language_msg = get_registration_language_message()
         whatsapp_bot.send_message(sender, language_msg)
         db_manager.update_registration_session(sender, 'language', temp_data)
         
     elif current_step == 'language':
-        # Validate language selection
-        lang_code = text_content.lower().strip()
-        valid_languages = ['en', 'ta', 'te', 'hi', 'kn', 'ml', 'mr', 'gu', 'bn']
+        # Validate language selection using full names
+        lang_code = detect_language_name(text_content)
         
-        if lang_code not in valid_languages:
+        if not lang_code:
             whatsapp_bot.send_message(
                 sender, 
-                "❌ Invalid language code. Please choose from: EN, TA, TE, HI, KN, ML, MR, GU, BN"
+                "❌ Invalid language. Please choose from: English, Tamil, Telugu, Hindi, Kannada, Malayalam, Marathi, Gujarati, Bengali"
             )
             return
         
@@ -860,6 +915,83 @@ def handle_registration_flow(sender: str, text_content: str):
             whatsapp_bot.send_message(sender, welcome_msg)
         else:
             whatsapp_bot.send_message(sender, "❌ Registration failed. Please try again later.")
+
+def get_registration_language_message() -> str:
+    """Get language selection message for registration with full names"""
+    return """Great! Please select your preferred language for nutrition analysis:
+
+🌍 **Available Languages:**
+• **English**
+• **Tamil** (தமிழ்)
+• **Telugu** (తెలుగు)
+• **Hindi** (हिन्दी)
+• **Kannada** (ಕನ್ನಡ)
+• **Malayalam** (മലയാളം)
+• **Marathi** (मराठी)
+• **Gujarati** (ગુજરાતી)
+• **Bengali** (বাংলা)
+
+💬 Reply with the full language name (e.g., 'English', 'Tamil', 'Hindi')"""
+
+def handle_language_change_request(sender: str, current_language: str):
+    """Enhanced language change request with current language context using full names"""
+    current_lang_name = language_manager.get_language_name(current_language)
+    
+    if current_language == 'ta':
+        instruction_msg = f"""🌍 **தற்போதைய மொழி:** {current_lang_name}
+
+🌍 **கிடைக்கும் மொழிகள்:**
+• **English**
+• **Tamil** (தமிழ்)
+• **Telugu** (తెలుగు)
+• **Hindi** (हिन्दी)
+• **Kannada** (ಕನ್ನಡ)
+• **Malayalam** (മലയാളം)
+
+💬 **பதில் அனுப்பு:**
+• முழு மொழி பெயர்: `Tamil` அல்லது `English`
+• அல்லது: `lang: Tamil` அல்லது `language: English`
+
+📝 **உதாரணம்:** `Tamil` தமிழுக்கு"""
+    
+    elif current_language == 'hi':
+        instruction_msg = f"""🌍 **वर्तमान भाषा:** {current_lang_name}
+
+🌍 **उपलब्ध भाषाएँ:**
+• **English**
+• **Tamil** (தமிழ்)
+• **Telugu** (తెలుగు)
+• **Hindi** (हिन्दी)
+• **Kannada** (ಕನ್ನಡ)
+• **Malayalam** (മലയാളം)
+
+💬 **उत्तर दें:**
+• पूरा भाषा नाम: `Hindi` या `English`
+• या: `lang: Hindi` या `language: English`
+
+📝 **उदाहरण:** `Hindi` हिंदी के लिए"""
+    
+    else:
+        instruction_msg = f"""🌍 **Current Language:** {current_lang_name}
+
+🌍 **Available Languages:**
+• **English**
+• **Tamil** (தமிழ்)
+• **Telugu** (తెలుగు)
+• **Hindi** (हिन्दी)
+• **Kannada** (ಕನ್ನಡ)
+• **Malayalam** (മലയാളം)
+• **Marathi** (मराठी)
+• **Gujarati** (ગુજરાતી)
+• **Bengali** (বাংলা)
+
+💬 **Reply with:**
+• Full language name: `English` or `Tamil`
+• Or: `lang: English` or `language: Tamil`
+
+📝 **Example:** `Tamil` for Tamil"""
+    
+    whatsapp_bot.send_message(sender, instruction_msg)
 
 # Updated image handling function
 def handle_image_message(message: Dict[str, Any]):
@@ -1042,11 +1174,11 @@ def handle_language_change_request(sender: str, current_language: str):
     whatsapp_bot.send_message(sender, instruction_msg)
     
 def handle_language_update(sender: str, user_id: int, lang_code: str):
-    """Handle language preference update with better validation"""
+    """Handle language preference update with better validation using full names"""
     valid_languages = ['en', 'ta', 'te', 'hi', 'kn', 'ml', 'mr', 'gu', 'bn']
     
     if lang_code not in valid_languages:
-        whatsapp_bot.send_message(sender, "❌ Invalid language code. Use: EN, TA, TE, HI, KN, ML, MR, GU, BN")
+        whatsapp_bot.send_message(sender, "❌ Invalid language. Please use full language names like: English, Tamil, Telugu, Hindi, Kannada, Malayalam")
         return
     
     # Update user language in database using user_id
@@ -1057,11 +1189,11 @@ def handle_language_update(sender: str, user_id: int, lang_code: str):
         
         # Send confirmation in the NEW language
         if lang_code == 'ta':
-            confirmation = f"✅ மொழி {lang_name} ஆக மாற்றப்பட்டது!\n\n{language_manager.get_message(lang_code, 'welcome')}"
+            confirmation = f"✅ மொழி **{lang_name}** ஆக மாற்றப்பட்டது!\n\n{language_manager.get_message(lang_code, 'welcome')}"
         elif lang_code == 'hi':
-            confirmation = f"✅ भाषा {lang_name} में बदल दी गई!\n\n{language_manager.get_message(lang_code, 'welcome')}"
+            confirmation = f"✅ भाषा **{lang_name}** में बदल दी गई!\n\n{language_manager.get_message(lang_code, 'welcome')}"
         else:
-            confirmation = f"✅ Language updated to {lang_name}!\n\n{language_manager.get_message(lang_code, 'welcome')}"
+            confirmation = f"✅ Language updated to **{lang_name}**!\n\n{language_manager.get_message(lang_code, 'welcome')}"
         
         whatsapp_bot.send_message(sender, confirmation)
         
