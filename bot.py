@@ -88,34 +88,64 @@ class DatabaseManager:
             raise
     
     def init_database(self):
-        """Initialize database tables"""
+        """Initialize normalized database tables"""
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
             
-            # Create users table
+            # Create languages table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS languages (
+                    id SERIAL PRIMARY KEY,
+                    code VARCHAR(5) UNIQUE NOT NULL,
+                    name VARCHAR(50) NOT NULL,
+                    native_name VARCHAR(50) NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            
+            # Insert default languages
+            languages_data = [
+                ('en', 'English', 'English'),
+                ('ta', 'Tamil', 'தமிழ்'),
+                ('te', 'Telugu', 'తెలుగు'),
+                ('hi', 'Hindi', 'हिन्दी'),
+                ('kn', 'Kannada', 'ಕನ್ನಡ'),
+                ('ml', 'Malayalam', 'മലയാളം'),
+                ('mr', 'Marathi', 'मराठी'),
+                ('gu', 'Gujarati', 'ગુજરાતી'),
+                ('bn', 'Bengali', 'বাংলা')
+            ]
+            
+            for code, name, native in languages_data:
+                cursor.execute("""
+                    INSERT INTO languages (code, name, native_name) 
+                    VALUES (%s, %s, %s) 
+                    ON CONFLICT (code) DO NOTHING
+                """, (code, name, native))
+            
+            # Create users table with normalized structure
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     id SERIAL PRIMARY KEY,
                     phone_number VARCHAR(20) UNIQUE NOT NULL,
                     name VARCHAR(100),
                     address TEXT,
-                    preferred_language VARCHAR(10) DEFAULT 'en',
+                    language_id INTEGER REFERENCES languages(id) DEFAULT 1,
                     registration_status VARCHAR(20) DEFAULT 'pending',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """)
             
-            # Create nutrition_analysis table
+            # Create nutrition_analysis table (normalized)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS nutrition_analysis (
                     id SERIAL PRIMARY KEY,
-                    user_id INTEGER REFERENCES users(id),
-                    phone_number VARCHAR(20) NOT NULL,
-                    image_url TEXT NOT NULL,
-                    s3_key TEXT NOT NULL,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    file_location TEXT NOT NULL,
                     analysis_result TEXT,
+                    language_id INTEGER REFERENCES languages(id),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """)
@@ -132,32 +162,66 @@ class DatabaseManager:
                 );
             """)
             
+            # Create language_change_requests table for tracking language changes
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS language_change_requests (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                    old_language_id INTEGER REFERENCES languages(id),
+                    new_language_id INTEGER REFERENCES languages(id),
+                    changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            
             # Create indexes for better performance
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone_number);")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_nutrition_phone ON nutrition_analysis(phone_number);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_language ON users(language_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_nutrition_user ON nutrition_analysis(user_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_nutrition_created ON nutrition_analysis(created_at);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_phone ON user_registration_sessions(phone_number);")
+            
+            # Add trigger to update updated_at automatically
+            cursor.execute("""
+                CREATE OR REPLACE FUNCTION update_updated_at_column()
+                RETURNS TRIGGER AS $$
+                BEGIN
+                    NEW.updated_at = CURRENT_TIMESTAMP;
+                    RETURN NEW;
+                END;
+                $$ language 'plpgsql';
+            """)
+            
+            cursor.execute("""
+                DROP TRIGGER IF EXISTS update_users_updated_at ON users;
+                CREATE TRIGGER update_users_updated_at
+                    BEFORE UPDATE ON users
+                    FOR EACH ROW
+                    EXECUTE FUNCTION update_updated_at_column();
+            """)
             
             conn.commit()
             cursor.close()
             conn.close()
-            logger.info("Database initialized successfully")
+            logger.info("Normalized database initialized successfully")
             
         except Exception as e:
             logger.error(f"Database initialization error: {e}")
             raise
     
     def get_user_by_phone(self, phone_number: str) -> Optional[Dict]:
-        """Get user by phone number"""
+        """Get user by phone number with language info"""
         try:
             conn = self.get_connection()
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             
-            cursor.execute(
-                "SELECT * FROM users WHERE phone_number = %s",
-                (phone_number,)
-            )
-            user = cursor.fetchone()
+            cursor.execute("""
+                SELECT u.*, l.code as language_code, l.name as language_name, l.native_name as language_native
+                FROM users u
+                LEFT JOIN languages l ON u.language_id = l.id
+                WHERE u.phone_number = %s
+            """, (phone_number,))
             
+            user = cursor.fetchone()
             cursor.close()
             conn.close()
             
@@ -167,23 +231,50 @@ class DatabaseManager:
             logger.error(f"Error getting user by phone: {e}")
             return None
     
-    def create_user(self, phone_number: str, name: str, address: str, language: str) -> bool:
-        """Create new user"""
+    def get_user_by_id(self, user_id: int) -> Optional[Dict]:
+        """Get user by ID with language info"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            cursor.execute("""
+                SELECT u.*, l.code as language_code, l.name as language_name, l.native_name as language_native
+                FROM users u
+                LEFT JOIN languages l ON u.language_id = l.id
+                WHERE u.id = %s
+            """, (user_id,))
+            
+            user = cursor.fetchone()
+            cursor.close()
+            conn.close()
+            
+            return dict(user) if user else None
+            
+        except Exception as e:
+            logger.error(f"Error getting user by ID: {e}")
+            return None
+    
+    def create_user(self, phone_number: str, name: str, address: str, language_code: str) -> bool:
+        """Create new user with language code"""
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
             
+            # Get language ID
+            cursor.execute("SELECT id FROM languages WHERE code = %s", (language_code,))
+            language_result = cursor.fetchone()
+            language_id = language_result[0] if language_result else 1  # Default to English
+            
             cursor.execute("""
-                INSERT INTO users (phone_number, name, address, preferred_language, registration_status)
+                INSERT INTO users (phone_number, name, address, language_id, registration_status)
                 VALUES (%s, %s, %s, %s, 'completed')
                 ON CONFLICT (phone_number) 
                 DO UPDATE SET 
                     name = EXCLUDED.name,
                     address = EXCLUDED.address,
-                    preferred_language = EXCLUDED.preferred_language,
-                    registration_status = 'completed',
-                    updated_at = CURRENT_TIMESTAMP
-            """, (phone_number, name, address, language))
+                    language_id = EXCLUDED.language_id,
+                    registration_status = 'completed'
+            """, (phone_number, name, address, language_id))
             
             conn.commit()
             cursor.close()
@@ -196,6 +287,43 @@ class DatabaseManager:
             
         except Exception as e:
             logger.error(f"Error creating user: {e}")
+            return False
+    
+    def update_user_language(self, user_id: int, language_code: str) -> bool:
+        """Update user's language preference"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            
+            # Get current language and new language IDs
+            cursor.execute("SELECT language_id FROM users WHERE id = %s", (user_id,))
+            current_result = cursor.fetchone()
+            old_language_id = current_result[0] if current_result else None
+            
+            cursor.execute("SELECT id FROM languages WHERE code = %s", (language_code,))
+            language_result = cursor.fetchone()
+            new_language_id = language_result[0] if language_result else 1
+            
+            # Update user language
+            cursor.execute("""
+                UPDATE users SET language_id = %s WHERE id = %s
+            """, (new_language_id, user_id))
+            
+            # Log language change
+            if old_language_id and old_language_id != new_language_id:
+                cursor.execute("""
+                    INSERT INTO language_change_requests (user_id, old_language_id, new_language_id)
+                    VALUES (%s, %s, %s)
+                """, (user_id, old_language_id, new_language_id))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating user language: {e}")
             return False
     
     def get_registration_session(self, phone_number: str) -> Optional[Dict]:
@@ -266,20 +394,21 @@ class DatabaseManager:
             logger.error(f"Error deleting registration session: {e}")
             return False
     
-    def save_nutrition_analysis(self, phone_number: str, image_url: str, s3_key: str, analysis_result: str) -> bool:
+    def save_nutrition_analysis(self, user_id: int, file_location: str, analysis_result: str, language_code: str) -> bool:
         """Save nutrition analysis to database"""
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
             
-            # Get user_id
-            user = self.get_user_by_phone(phone_number)
-            user_id = user['id'] if user else None
+            # Get language ID
+            cursor.execute("SELECT id FROM languages WHERE code = %s", (language_code,))
+            language_result = cursor.fetchone()
+            language_id = language_result[0] if language_result else 1
             
             cursor.execute("""
-                INSERT INTO nutrition_analysis (user_id, phone_number, image_url, s3_key, analysis_result)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (user_id, phone_number, image_url, s3_key, analysis_result))
+                INSERT INTO nutrition_analysis (user_id, file_location, analysis_result, language_id)
+                VALUES (%s, %s, %s, %s)
+            """, (user_id, file_location, analysis_result, language_id))
             
             conn.commit()
             cursor.close()
@@ -291,7 +420,7 @@ class DatabaseManager:
             logger.error(f"Error saving nutrition analysis: {e}")
             return False
 
-    def get_user_stats(self, phone_number: str) -> Dict:
+    def get_user_stats(self, user_id: int) -> Dict:
         """Get user analysis statistics"""
         try:
             conn = self.get_connection()
@@ -300,33 +429,64 @@ class DatabaseManager:
             cursor.execute("""
                 SELECT COUNT(*) as total_analyses
                 FROM nutrition_analysis 
-                WHERE phone_number = %s
-            """, (phone_number,))
+                WHERE user_id = %s
+            """, (user_id,))
             
             total_result = cursor.fetchone()
             
             cursor.execute("""
                 SELECT DATE(created_at) as analysis_date, COUNT(*) as daily_count
                 FROM nutrition_analysis 
-                WHERE phone_number = %s 
+                WHERE user_id = %s 
                 GROUP BY DATE(created_at)
                 ORDER BY analysis_date DESC
                 LIMIT 7
-            """, (phone_number,))
+            """, (user_id,))
             
             recent_stats = cursor.fetchall()
+            
+            # Get language usage stats
+            cursor.execute("""
+                SELECT l.name, l.native_name, COUNT(*) as usage_count
+                FROM nutrition_analysis na
+                JOIN languages l ON na.language_id = l.id
+                WHERE na.user_id = %s
+                GROUP BY l.id, l.name, l.native_name
+                ORDER BY usage_count DESC
+            """, (user_id,))
+            
+            language_stats = cursor.fetchall()
             
             cursor.close()
             conn.close()
             
             return {
                 'total_analyses': total_result['total_analyses'] if total_result else 0,
-                'recent_analyses': [dict(row) for row in recent_stats] if recent_stats else []
+                'recent_analyses': [dict(row) for row in recent_stats] if recent_stats else [],
+                'language_usage': [dict(row) for row in language_stats] if language_stats else []
             }
             
         except Exception as e:
             logger.error(f"Error getting user stats: {e}")
-            return {'total_analyses': 0, 'recent_analyses': []}
+            return {'total_analyses': 0, 'recent_analyses': [], 'language_usage': []}
+
+    def get_all_languages(self) -> List[Dict]:
+        """Get all available languages"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            cursor.execute("SELECT * FROM languages ORDER BY name")
+            languages = cursor.fetchall()
+            
+            cursor.close()
+            conn.close()
+            
+            return [dict(lang) for lang in languages] if languages else []
+            
+        except Exception as e:
+            logger.error(f"Error getting languages: {e}")
+            return []
 
     def cleanup_old_registration_sessions(self):
         """Clean up old registration sessions (older than 24 hours)"""
@@ -355,640 +515,614 @@ class S3Manager:
         self.s3_client = s3_client
         self.bucket_name = AWS_S3_BUCKET
     
-    def upload_image(self, image_bytes: bytes, phone_number: str) -> tuple[Optional[str], Optional[str]]:
-        """Upload image to S3 and return URL and key"""
+    def upload_image(self, image_bytes: bytes, user_id: int) -> Optional[str]:
+        """Upload image to S3 and return file location path"""
         try:
-            # Generate unique filename
+            # Generate unique filename with user_id
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"nutrition_images/{phone_number}/{timestamp}_{uuid.uuid4().hex[:8]}.jpg"
+            filename = f"{timestamp}_{uuid.uuid4().hex[:8]}.jpeg"
+            file_location = f"/nutrition_images/{user_id}/{filename}"
+            
+            # S3 key (remove leading slash for S3)
+            s3_key = file_location.lstrip('/')
             
             # Upload to S3
             self.s3_client.put_object(
                 Bucket=self.bucket_name,
-                Key=filename,
+                Key=s3_key,
                 Body=image_bytes,
                 ContentType='image/jpeg'
             )
             
-            # Generate URL
-            image_url = f"https://{self.bucket_name}.s3.{AWS_REGION}.amazonaws.com/{filename}"
-            
-            return image_url, filename
+            logger.info(f"Image uploaded successfully to {file_location}")
+            return file_location
             
         except ClientError as e:
             logger.error(f"S3 upload error: {e}")
-            return None, None
+            return None
         except Exception as e:
             logger.error(f"Unexpected S3 error: {e}")
-            return None, None
+            return None
+    
+    def get_image_url(self, file_location: str) -> str:
+        """Generate S3 URL from file location"""
+        s3_key = file_location.lstrip('/')
+        return f"https://{self.bucket_name}.s3.{AWS_REGION}.amazonaws.com/{s3_key}"
 
 class LanguageManager:
-    def __init__(self):
-        self.languages = {
-            'en': 'English',
-            'ta': 'Tamil (தமிழ்)',
-            'te': 'Telugu (తెలుగు)',
-            'hi': 'Hindi (हिन्दी)',
-            'kn': 'Kannada (ಕನ್ನಡ)',
-            'ml': 'Malayalam (മലയാളം)',
-            'mr': 'Marathi (मराठी)',
-            'gu': 'Gujarati (ગુજરાતી)',
-            'bn': 'Bengali (বাংলা)'
-        }
-        
+    def __init__(self, db_manager: DatabaseManager):
+        self.db_manager = db_manager
+        self.languages = {}
         self.messages = {
             'en': {
-                'welcome': "👋 Hello! I'm your AI Nutrition Analyzer bot!\n\n📸 Send me a photo of any food and I'll provide:\n• Detailed nutritional information\n• Calorie count and macros\n• Health analysis and tips\n• Improvement suggestions\n\nJust take a clear photo of your meal and send it to me! 🍽️",
+                'welcome': "👋 Hello! I'm your AI Nutrition Analyzer bot!\n\n📸 Send me a photo of any food and I'll provide:\n• Detailed nutritional information\n• Calorie count and macros\n• Health analysis and tips\n• Improvement suggestions\n\nJust take a clear photo of your meal and send it to me! 🍽️\n\n🌍 *Change language anytime:* Type 'language' or '/lang'",
                 'registration_name': "Welcome! I need to collect some basic information from you.\n\n📝 Please enter your full name:",
                 'registration_address': "Thank you! Now please enter your address:",
-                'registration_language': "Great! Please select your preferred language for nutrition analysis:\n\n" + "\n".join([f"{code.upper()}. {name}" for code, name in [
-                    ('en', 'English'),
-                    ('ta', 'Tamil (தமிழ்)'),
-                    ('te', 'Telugu (తెలుగు)'),
-                    ('hi', 'Hindi (हिन्दी)'),
-                    ('kn', 'Kannada (ಕನ್ನಡ)'),
-                    ('ml', 'Malayalam (മലയാളം)')
-                ]]) + "\n\nReply with the language code (e.g., 'EN' for English, 'TA' for Tamil)",
-                'registration_complete': "✅ Registration completed successfully! You can now send me food photos for nutrition analysis.",
+                'registration_language': "Great! Please select your preferred language for nutrition analysis:",
+                'registration_complete': "✅ Registration completed successfully! You can now send me food photos for nutrition analysis.\n\n🌍 *Change language anytime:* Type 'language' or '/lang'",
                 'analyzing': "🔍 Analyzing your food image... This may take a few moments.",
-                'help': "🆘 **How to use this bot:**\n\n1. Take a clear photo of your food\n2. Send the image to me\n3. Wait for the analysis (usually 10-30 seconds)\n4. Get detailed nutrition information!\n\n**Tips for best results:**\n• Take photos in good lighting\n• Show the food clearly from above\n• Include the whole serving if possible\n• One dish per photo works best\n\nSend me a food photo to get started! 📸"
+                'help': "🆘 **How to use this bot:**\n\n1. Take a clear photo of your food\n2. Send the image to me\n3. Wait for the analysis (usually 10-30 seconds)\n4. Get detailed nutrition information!\n\n**Tips for best results:**\n• Take photos in good lighting\n• Show the food clearly from above\n• Include the whole serving if possible\n• One dish per photo works best\n\n**Commands:**\n• Type 'language' or '/lang' to change language\n• Type 'stats' to see your analysis history\n• Type 'profile' to view your information\n\nSend me a food photo to get started! 📸",
+                'language_changed': "✅ Language successfully changed to {language_name}!\n\nYou can change your language anytime by typing 'language' or '/lang'",
+                'language_selection': "🌍 **Select your preferred language:**\n\nReply with the language code (e.g., 'en' for English):",
+                'invalid_language': "❌ Invalid language code. Please choose from the available options.",
+                'language_change_prompt': "🌍 **Change Language**\n\nCurrent language: {current_language}\n\n**Available languages:**\n{language_list}\n\n💬 Reply with the language code (e.g., 'ta' for Tamil, 'hi' for Hindi)"
             },
             'ta': {
-                'welcome': "👋 வணக்கம்! நான் உங்கள் AI ஊட்டச்சத்து பகுப்பாய்வு பாட்!\n\n📸 எந்த உணவின் புகைப்படத்தையும் அனுப்புங்கள், நான் வழங்குவேன்:\n• விரிவான ஊட்டச்சத்து தகவல்\n• கலோரி எண்ணிக்கை மற்றும் மேக்ரோக்கள்\n• ஆரோக்கிய பகுப்பாய்வு மற்றும் குறிப்புகள்\n• மேம்படுத்தும் பரிந்துரைகள்\n\nஉங்கள் உணவின் தெளிவான புகைப்படத்தை எடுத்து அனுப்புங்கள! 🍽️",
+                'welcome': "👋 வணக்கம்! நான் உங்கள் AI ஊட்டச்சத்து பகுப்பாய்வு பாட்!\n\n📸 எந்த உணவின் புகைப்படத்தையும் அனுப்புங்கள், நான் வழங்குவேன்:\n• விரிவான ஊட்டச்சத்து தகவல்\n• கலோரி எண்ணிக்கை மற்றும் மேக்ரோக்கள்\n• ஆரோக்கிய பகுப்பாய்வு மற்றும் குறிப்புகள்\n• மேம்படுத்தும் பரிந்துரைகள்\n\nஉங்கள் உணவின் தெளிவான புகைப்படத்தை எடுத்து அனுப்புங்கள! 🍽️\n\n🌍 *மொழி மாற்ற:* 'language' அல்லது '/lang' என்று டைப் செய்யவும்",
                 'analyzing': "🔍 உங்கள் உணவு படத்தை பகுப்பாய்வு செய்கிறேன்... இதற்கு சில நிமிடங்கள் ஆகலாம்.",
-                'help': "🆘 **இந்த பாட்டை எப்படி பயன்படுத்துவது:**\n\n1. உங்கள் உணவின் தெளிவான புகைப்படத்தை எடுங்கள்\n2. படத்தை எனக்கு அனுப்புங்கள்\n3. பகுப்பாய்விற்காக காத்திருங்கள்\n4. விரிவான ஊட்டச்சத்து தகவலைப் பெறுங்கள்!\n\nதொடங்க எனக்கு உணவு புகைப்படம் ஒன்றை அனுப்புங்கள்! 📸"
+                'help': "🆘 **இந்த பாட்டை எப்படி பயன்படுத்துவது:**\n\n1. உங்கள் உணவின் தெளிவான புகைப்படத்தை எடுங்கள்\n2. படத்தை எனக்கு அனுப்புங்கள்\n3. பகுப்பாய்விற்காக காத்திருங்கள்\n4. விரிவான ஊட்டச்சத்து தகவலைப் பெறுங்கள்!\n\n**கட்டளைகள்:**\n• மொழி மாற்ற 'language' அல்லது '/lang' டைப் செய்யவும்\n• புள்ளிவிவரங்களுக்கு 'stats' டைப் செய்யவும்\n\nதொடங்க எனக்கு உணவு புகைப்படம் ஒன்றை அனுப்புங்கள்! 📸",
+                'language_changed': "✅ மொழி வெற்றிகரமாக {language_name} ஆக மாற்றப்பட்டது!\n\n'language' அல்லது '/lang' டைப் செய்து எந்த நேரத்திலும் மொழியை மாற்றலாம்",
+                'language_change_prompt': "🌍 **மொழி மாற்றவும்**\n\nதற்போதைய மொழி: {current_language}\n\n**கிடைக்கும் மொழிகள்:**\n{language_list}\n\n💬 மொழி குறியீட்டுடன் பதிலளிக்கவும் (எ.கா., 'en' ஆங்கிலத்திற்கு)"
             },
             'hi': {
-                'welcome': "👋 नमस्ते! मैं आपका AI पोषण विश्लेषक बॉट हूँ!\n\n📸 मुझे किसी भी खाने की फोटो भेजें और मैं प्रदान करूंगा:\n• विस्तृत पोषण संबंधी जानकारी\n• कैलोरी गिनती और मैक्रोज़\n• स्वास्थ्य विश्लेषण और सुझाव\n• सुधार के सुझाव\n\nबस अपने भोजन की एक स्पष्ट तस्वीर लें और मुझे भेज दें! 🍽️",
+                'welcome': "👋 नमस्ते! मैं आपका AI पोषण विश्लेषक बॉट हूँ!\n\n📸 मुझे किसी भी खाने की फोटो भेजें और मैं प्रदान करूंगा:\n• विस्तृत पोषण संबंधी जानकारी\n• कैलोरी गिनती और मैक्रोज़\n• स्वास्थ्य विश्लेषण और सुझाव\n• सुधार के सुझाव\n\nबस अपने भोजन की एक स्पष्ट तस्वीर लें और मुझे भेज दें! 🍽️\n\n🌍 *भाषा बदलें:* 'language' या '/lang' टाइप करें",
                 'analyzing': "🔍 आपकी खाने की तस्वीर का विश्लेषण कर रहा हूँ... इसमें कुछ समय लग सकता है।",
-                'help': "🆘 **इस बॉट का उपयोग कैसे करें:**\n\n1. अपने खाने की स्पष्ट तस्वीर लें\n2. तस्वीर मुझे भेजें\n3. विश्लेषण का इंतजार करें\n4. विस्तृत पोषण जानकारी प्राप्त करें!\n\nशुरू करने के लिए मुझे खाने की तस्वीर भेजें! 📸"
+                'help': "🆘 **इस बॉट का उपयोग कैसे करें:**\n\n1. अपने खाने की स्पष्ट तस्वीर लें\n2. तस्वीर मुझे भेजें\n3. विश्लेषण का इंतजार करें\n4. विस्तृत पोषण जानकारी प्राप्त करें!\n\n**कमांड्स:**\n• भाषा बदलने के लिए 'language' या '/lang' टाइप करें\n• आंकड़ों के लिए 'stats' टाइप करें\n\nशुरू करने के लिए मुझे खाने की तस्वीर भेजें! 📸",
+                'language_changed': "✅ भाषा सफलतापूर्वक {language_name} में बदल दी गई!\n\n'language' या '/lang' टाइप करके किसी भी समय भाषा बदल सकते हैं",
+                'language_change_prompt': "🌍 **भाषा बदलें**\n\nवर्तमान भाषा: {current_language}\n\n**उपलब्ध भाषाएं:**\n{language_list}\n\n💬 भाषा कोड के साथ उत्तर दें (जैसे, 'en' अंग्रेजी के लिए)"
             }
         }
+        self._load_languages()
     
-    def get_message(self, language: str, key: str) -> str:
-        """Get message in specified language"""
-        return self.messages.get(language, self.messages['en']).get(key, self.messages['en'][key])
+    def _load_languages(self):
+        """Load languages from database"""
+        languages = self.db_manager.get_all_languages()
+        self.languages = {lang['code']: lang for lang in languages}
+    
+    def get_message(self, language: str, key: str, **kwargs) -> str:
+        """Get message in specified language with formatting"""
+        message = self.messages.get(language, self.messages['en']).get(key, self.messages['en'][key])
+        return message.format(**kwargs) if kwargs else message
     
     def get_language_name(self, code: str) -> str:
         """Get language name by code"""
-        return self.languages.get(code, 'English')
-
-    def get_language_options_text(self) -> str:
+        lang = self.languages.get(code)
+        return lang['native_name'] if lang else 'English'
+    
+    def get_language_options_text(self, current_language: str = 'en') -> str:
         """Get formatted language options for user selection"""
         options = []
-        for code, name in self.languages.items():
-            options.append(f"*{code.upper()}* - {name}")
+        current_lang_name = self.get_language_name(current_language)
         
-        return "🌍 *Please select your preferred language:*\n\n" + "\n".join(options) + "\n\n💬 *Reply with the language code* (e.g., EN, TA, HI)"
+        for code, lang in self.languages.items():
+            marker = "✓" if code == current_language else "•"
+            options.append(f"{marker} *{code}* - {lang['native_name']}")
+        
+        language_list = "\n".join(options)
+        
+        return self.get_message(current_language, 'language_change_prompt',
+                              current_language=current_lang_name,
+                              language_list=language_list)
+    
+    def is_valid_language(self, code: str) -> bool:
+        """Check if language code is valid"""
+        return code in self.languages
 
 class NutritionAnalyzer:
     def __init__(self):
+        self.model_name = "gemini-1.5-flash"
+        self.model = genai.GenerativeModel(self.model_name)
+    
+    def analyze_food_image(self, image_bytes: bytes, language: str = 'en') -> Optional[str]:
+        """Analyze food image using Gemini AI with language-specific prompts"""
         try:
-            self.model = genai.GenerativeModel('gemini-1.5-flash')
-            logger.info("Nutrition analyzer initialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to initialize nutrition analyzer: {e}")
-            raise
-        
-    def analyze_image(self, image: Image.Image, language: str = 'en') -> str:
-        """Analyze food image and return nutrition information in specified language"""
-        
-        language_prompts = {
-            'en': "Analyze this food image and provide detailed nutritional information in English.",
-            'ta': "இந்த உணவு படத்தை பகுப்பாய்வு செய்து தமிழில் விரிவான ஊட்டச்சத்து தகவல்களை வழங்கவும்.",
-            'te': "ఈ ఆహార చిత్రాన్ని విశ్లేషించి తెలుగులో వివరణాత్మక పోషకాహార సమాచారాన్ని అందించండి.",
-            'hi': "इस भोजन की छवि का विश्लेषण करें और हिंदी में विस्तृत पोषण संबंधी जानकारी प्रदान करें।",
-            'kn': "ಈ ಆಹಾರ ಚಿತ್ರವನ್ನು ವಿಶ್ಲೇಷಿಸಿ ಮತ್ತು ಕನ್ನಡದಲ್ಲಿ ವಿವರವಾದ ಪೋಷಣೆ ಮಾಹಿತಿಯನ್ನು ಒದಗಿಸಿ।",
-            'ml': "ഈ ഭക്ഷണ ചിത്രം വിശകലനം ചെയ്യുകയും മലയാളത്തിൽ വിശദമായ പോഷകാഹാര വിവരങ്ങൾ നൽകുകയും ചെയ്യുക।"
-        }
-        
-        base_prompt = """
-        Please provide a clear, easy-to-read response with the following information:
-
-        🍽️ **DISH IDENTIFICATION**
-        - Name and description of the dish
-        - Type of cuisine
-        - Confidence level in identification
-
-        📏 **SERVING SIZE**
-        - Estimated serving size and weight
-
-        🔥 **NUTRITION FACTS (per serving)**
-        - Calories
-        - Protein, Carbohydrates, Fat, Fiber, Sugar (in grams)
-        - Key vitamins and minerals
-
-        💪 **HEALTH ANALYSIS**
-        - Overall health score (1-10)
-        - Nutritional strengths
-        - Areas of concern
-
-        💡 **IMPROVEMENT SUGGESTIONS**
-        - Ways to make it healthier
-        - Foods to add or reduce
-        - Better cooking methods
-
-        🚨 **DIETARY INFORMATION**
-        - Potential allergens
-        - Suitable for: Vegetarian/Vegan/Gluten-free/etc.
-
-        Please format your response in a clear, conversational way that's easy to read on a mobile device.
-        If you cannot clearly identify the food, please indicate this and provide your best assessment.
-        """
-        
-        language_instruction = language_prompts.get(language, language_prompts['en'])
-        full_prompt = f"{language_instruction}\n\n{base_prompt}"
-        
-        try:
-            response = self.model.generate_content([full_prompt, image])
-            return response.text.strip()
+            # Language-specific prompts
+            prompts = {
+                'en': """Analyze this food image and provide detailed nutritional information in English. 
+                Include:
+                1. Food identification and ingredients
+                2. Estimated portion size and calories
+                3. Macronutrients (carbs, protein, fat) in grams
+                4. Key vitamins and minerals
+                5. Health benefits and considerations
+                6. Suggestions for improvement or pairing
+                
+                Format the response in a clear, easy-to-read manner with emojis for better presentation.""",
+                
+                'ta': """இந்த உணவு படத்தை பகுப்பாய்வு செய்து தமிழில் விரிவான ஊட்டச்சத்து தகவல்களை வழங்கவும்.
+                உள்ளடக்க வேண்டியவை:
+                1. உணவு அடையாளம் மற்றும் பொருட்கள்
+                2. மதிப்பிடப்பட்ட பகுதி அளவு மற்றும் கலோரிகள்
+                3. முக்கிய ஊட்டச்சத்துக்கள் (கார்போஹைட்ரேட், புரதம், கொழுப்பு) கிராமில்
+                4. முக்கிய வைட்டமின்கள் மற்றும் தாதுக்கள்
+                5. ஆரோக்கிய நன்மைகள் மற்றும் கவனிக்க வேண்டியவை
+                6. மேம்படுத்துவதற்கான பரிந்துரைகள்
+                
+                எமோஜிகளுடன் தெளிவாக படிக்கக்கூடிய வகையில் பதிலை வடிவமைக்கவும்.""",
+                
+                'hi': """इस खाने की तस्वीर का विश्लेषण करें और हिंदी में विस्तृत पोषण संबंधी जानकारी प्रदान करें।
+                शामिल करें:
+                1. भोजन की पहचान और सामग्री
+                2. अनुमानित हिस्से का आकार और कैलोरी
+                3. मुख्य पोषक तत्व (कार्ब्स, प्रोटीन, वसा) ग्राम में
+                4. मुख्य विटामिन और खनिज
+                5. स्वास्थ्य लाभ और विचारणीय बातें
+                6. सुधार के सुझाव
+                
+                बेहतर प्रस्तुति के लिए इमोजी के साथ स्पष्ट, पढ़ने में आसान तरीके से जवाब को प्रारूपित करें।""",
+                
+                'te': """ఈ ఆహార చిత్రాన్ని విశ్లేషించి తెలుగులో వివరణాత్మక పోషకాహార సమాచారాన్ని అందించండి.
+                కలిగి ఉండవలసినవి:
+                1. ఆహార గుర్తింపు మరియు పదార్థాలు
+                2. అంచనా వేసిన భాగం పరిమాణం మరియు కేలరీలు
+                3. ప్రధాన పోషకాలు (కార్బోహైడ్రేట్స్, ప్రోటీన్, కొవ్వు) గ్రాములలో
+                4. ముఖ్య విటమిన్లు మరియు మినరల్స్
+                5. ఆరోగ్య ప్రయోజనాలు మరియు పరిగణనలు
+                6. మెరుగుదల సూచనలు
+                
+                మెరుగైన ప్రజెంటేషన్ కోసం ఎమోజీలతో స్పష్టమైన, చదవడానికి సులభమైన రీతిలో ప్రతిస్పందనను రూపొందించండి.""",
+                
+                'kn': """ಈ ಆಹಾರ ಚಿತ್ರವನ್ನು ವಿಶ್ಲೇಷಿಸಿ ಮತ್ತು ಕನ್ನಡದಲ್ಲಿ ವಿವರವಾದ ಪೌಷ್ಟಿಕಾಂಶದ ಮಾಹಿತಿಯನ್ನು ಒದಗಿಸಿ.
+                ಒಳಗೊಂಡಿರಬೇಕಾದವು:
+                1. ಆಹಾರ ಗುರುತಿಸುವಿಕೆ ಮತ್ತು ಘಟಕಗಳು
+                2. ಅಂದಾಜು ಭಾಗದ ಗಾತ್ರ ಮತ್ತು ಕ್ಯಾಲೊರಿಗಳು
+                3. ಮುಖ್ಯ ಪೌಷ್ಟಿಕಾಂಶಗಳು (ಕಾರ್ಬೋಹೈಡ್ರೇಟ್ಸ್, ಪ್ರೋಟೀನ್, ಕೊಬ್ಬು) ಗ್ರಾಂಗಳಲ್ಲಿ
+                4. ಮುಖ್ಯ ಜೀವಸತ್ವಗಳು ಮತ್ತು ಖನಿಜಗಳು
+                5. ಆರೋಗ್ಯ ಪ್ರಯೋಜನಗಳು ಮತ್ತು ಪರಿಗಣನೆಗಳು
+                6. ಸುಧಾರಣೆಯ ಸಲಹೆಗಳು
+                
+                ಉತ್ತಮ ಪ್ರಸ್ತುತಿಗಾಗಿ ಎಮೋಜಿಗಳೊಂದಿಗೆ ಸ್ಪಷ್ಟವಾದ, ಓದಲು ಸುಲಭವಾದ ರೀತಿಯಲ್ಲಿ ಪ್ರತಿಕ್ರಿಯೆಯನ್ನು ರೂಪಿಸಿ.""",
+                
+                'ml': """ഈ ഭക്ഷണ ചിത്രം വിശകലനം ചെയ്ത് മലയാളത്തിൽ വിശദമായ പോഷകാഹാര വിവരങ്ങൾ നൽകുക.
+                ഉൾപ്പെടുത്തേണ്ടവ:
+                1. ഭക്ഷണ തിരിച്ചറിയലും ചേരുവകളും
+                2. കണക്കാക്കിയ ഭാഗത്തിന്റെ വലുപ്പവും കലോറിയും
+                3. പ്രധാന പോഷകങ്ങൾ (കാർബോഹൈഡ്രേറ്റ്, പ്രോട്ടീൻ, കൊഴുപ്പ്) ഗ്രാമിൽ
+                4. പ്രധാന വിറ്റാമിനുകളും ധാതുക്കളും
+                5. ആരോഗ്യ ഗുണങ്ങളും പരിഗണനകളും
+                6. മെച്ചപ്പെടുത്തുന്നതിനുള്ള നിർദ്ദേശങ്ങൾ
+                
+                മികച്ച അവതരണത്തിനായി ഇമോജികൾക്കൊപ്പം വ്യക്തമായ, വായിക്കാൻ എളുപ്പമുള്ള രീതിയിൽ പ്രതികരണം രൂപപ്പെടുത്തുക."""
+            }
+            
+            # Get the appropriate prompt for the language
+            prompt = prompts.get(language, prompts['en'])
+            
+            # Convert bytes to PIL Image
+            image = Image.open(io.BytesIO(image_bytes))
+            
+            # Generate content with the image
+            response = self.model.generate_content([prompt, image])
+            
+            if response and response.text:
+                logger.info(f"Successfully analyzed food image in {language}")
+                return response.text
+            
+            logger.warning("No response from Gemini AI")
+            return None
             
         except Exception as e:
-            logger.error(f"Gemini analysis error: {e}")
-            return f"❌ Sorry, I couldn't analyze this image. Please try again with a clearer photo of your food."
+            logger.error(f"Error analyzing food image: {e}")
+            return None
 
-class WhatsAppBot:
-    def __init__(self, token: str, phone_number_id: str):
-        self.token = token
-        self.phone_number_id = phone_number_id
-        self.base_url = f"https://graph.facebook.com/v17.0/{phone_number_id}"
-        
+class WhatsAppManager:
+    def __init__(self, db_manager: DatabaseManager, s3_manager: S3Manager, nutrition_analyzer: NutritionAnalyzer, language_manager: LanguageManager):
+        self.db_manager = db_manager
+        self.s3_manager = s3_manager
+        self.nutrition_analyzer = nutrition_analyzer
+        self.language_manager = language_manager
+    
     def send_message(self, to: str, message: str) -> bool:
-        """Send text message to WhatsApp user"""
-        url = f"{self.base_url}/messages"
-        
-        headers = {
-            'Authorization': f'Bearer {self.token}',
-            'Content-Type': 'application/json'
-        }
-        
-        data = {
-            'messaging_product': 'whatsapp',
-            'to': to,
-            'type': 'text',
-            'text': {'body': message}
-        }
-        
+        """Send text message via WhatsApp API"""
         try:
-            response = requests.post(url, headers=headers, json=data, timeout=30)
+            url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+            headers = {
+                "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+                "Content-Type": "application/json"
+            }
+            data = {
+                "messaging_product": "whatsapp",
+                "to": to,
+                "type": "text",
+                "text": {"body": message}
+            }
+            
+            response = requests.post(url, headers=headers, json=data)
+            
             if response.status_code == 200:
                 logger.info(f"Message sent successfully to {to}")
                 return True
             else:
-                logger.error(f"Failed to send message: {response.status_code} - {response.text}")
+                logger.error(f"Failed to send message: {response.status_code}, {response.text}")
                 return False
+                
         except Exception as e:
-            logger.error(f"Error sending message: {e}")
+            logger.error(f"Error sending WhatsApp message: {e}")
             return False
     
-    def download_media(self, media_id: str) -> bytes:
-        """Download media file from WhatsApp"""
+    def download_media(self, media_id: str) -> Optional[bytes]:
+        """Download media from WhatsApp API"""
         try:
             # Get media URL
-            url = f"https://graph.facebook.com/v17.0/{media_id}"
-            headers = {'Authorization': f'Bearer {self.token}'}
+            url = f"https://graph.facebook.com/v18.0/{media_id}"
+            headers = {"Authorization": f"Bearer {WHATSAPP_TOKEN}"}
             
-            response = requests.get(url, headers=headers, timeout=30)
+            response = requests.get(url, headers=headers)
             if response.status_code != 200:
-                raise Exception(f"Failed to get media URL: {response.status_code}")
+                logger.error(f"Failed to get media URL: {response.status_code}")
+                return None
             
-            media_data = response.json()
-            media_url = media_data.get('url')
-            
+            media_url = response.json().get('url')
             if not media_url:
-                raise Exception("No media URL found")
+                logger.error("No media URL found")
+                return None
             
-            # Download the actual media file
-            media_response = requests.get(media_url, headers=headers, timeout=60)
-            if media_response.status_code != 200:
-                raise Exception(f"Failed to download media: {media_response.status_code}")
+            # Download the actual media
+            media_response = requests.get(media_url, headers=headers)
+            if media_response.status_code == 200:
+                logger.info("Media downloaded successfully")
+                return media_response.content
+            else:
+                logger.error(f"Failed to download media: {media_response.status_code}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error downloading media: {e}")
+            return None
+    
+    def handle_text_message(self, from_phone: str, message_text: str) -> None:
+        """Handle incoming text messages with language change functionality"""
+        try:
+            # Clean phone number
+            phone_number = from_phone.replace('+', '').strip()
             
-            return media_response.content
+            # Normalize message text
+            message_lower = message_text.lower().strip()
+            
+            # Check for language change commands
+            if message_lower in ['language', '/lang', 'lang', 'भाषा', 'மொழி', 'భాష', 'ಭಾಷೆ', 'ഭാഷ']:
+                self.handle_language_change_request(phone_number)
+                return
+            
+            # Check if user is registered
+            user = self.db_manager.get_user_by_phone(phone_number)
+            
+            if not user or user['registration_status'] != 'completed':
+                # Handle registration process
+                self.handle_registration_process(phone_number, message_text)
+                return
+            
+            # Get user's language
+            user_language = user.get('language_code', 'en')
+            
+            # Check if this is a language code selection
+            if self.language_manager.is_valid_language(message_lower):
+                success = self.db_manager.update_user_language(user['id'], message_lower)
+                if success:
+                    new_language_name = self.language_manager.get_language_name(message_lower)
+                    message = self.language_manager.get_message(
+                        message_lower, 'language_changed', 
+                        language_name=new_language_name
+                    )
+                    self.send_message(phone_number, message)
+                else:
+                    self.send_message(phone_number, "❌ Failed to change language. Please try again.")
+                return
+            
+            # Handle other commands
+            if message_lower in ['help', 'start', '/start', '/help']:
+                help_message = self.language_manager.get_message(user_language, 'help')
+                self.send_message(phone_number, help_message)
+                
+            elif message_lower in ['stats', '/stats', 'statistics']:
+                self.handle_stats_request(user, user_language)
+                
+            elif message_lower in ['profile', '/profile']:
+                self.handle_profile_request(user, user_language)
+                
+            else:
+                # General help message for unrecognized commands
+                help_message = self.language_manager.get_message(user_language, 'help')
+                self.send_message(phone_number, help_message)
+                
+        except Exception as e:
+            logger.error(f"Error handling text message: {e}")
+            self.send_message(from_phone, "❌ Sorry, I encountered an error processing your message. Please try again.")
+    
+    def handle_language_change_request(self, phone_number: str) -> None:
+        """Handle language change request"""
+        try:
+            user = self.db_manager.get_user_by_phone(phone_number)
+            if not user:
+                # User not registered yet
+                self.send_message(phone_number, "Please register first by sending your name.")
+                return
+            
+            current_language = user.get('language_code', 'en')
+            language_options = self.language_manager.get_language_options_text(current_language)
+            self.send_message(phone_number, language_options)
             
         except Exception as e:
-            logger.error(f"Error downloading media {media_id}: {e}")
-            raise
-
-# Initialize components
-try:
-    db_manager = DatabaseManager()
-    s3_manager = S3Manager()
-    language_manager = LanguageManager()
-    analyzer = NutritionAnalyzer()
-    whatsapp_bot = WhatsAppBot(WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID)
-    logger.info("All components initialized successfully")
-except Exception as e:
-    logger.error(f"Failed to initialize components: {e}")
-    raise
-
-@app.route('/', methods=['GET'])
-def health():
-    """Root endpoint for health check"""
-    return jsonify({
-        'status': 'healthy',
-        'service': 'WhatsApp Nutrition Analyzer Bot',
-        'timestamp': datetime.now().isoformat()
-    }), 200
-
-@app.route('/webhook', methods=['GET'])
-def verify_webhook():
-    """Verify WhatsApp webhook"""
-    mode = request.args.get('hub.mode')
-    token = request.args.get('hub.verify_token')
-    challenge = request.args.get('hub.challenge')
+            logger.error(f"Error handling language change request: {e}")
+            self.send_message(phone_number, "❌ Error changing language. Please try again.")
     
-    if mode == 'subscribe' and token == VERIFY_TOKEN:
-        logger.info("Webhook verified successfully")
-        return challenge
-    else:
-        logger.warning("Webhook verification failed")
-        return 'Verification failed', 403
-
-@app.route('/webhook', methods=['POST'])
-def handle_webhook():
-    """Handle incoming WhatsApp messages"""
-    try:
-        data = request.get_json()
-        
-        if not data:
-            return jsonify({'status': 'no_data'}), 400
-        
-        # Check if this is a WhatsApp message
-        if data.get('object') != 'whatsapp_business_account':
-            return jsonify({'status': 'ignored'}), 200
-        
-        entries = data.get('entry', [])
-        for entry in entries:
-            changes = entry.get('changes', [])
-            for change in changes:
-                value = change.get('value', {})
-                messages = value.get('messages', [])
-                
-                for message in messages:
-                    process_message(message)
-        
-        return jsonify({'status': 'success'}), 200
-        
-    except Exception as e:
-        logger.error(f"Webhook processing error: {e}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
-def process_message(message: Dict[str, Any]):
-    """Process individual WhatsApp message"""
-    try:
-        message_type = message.get('type')
-        sender = message.get('from')
-        
-        logger.info(f"Processing {message_type} message from {sender}")
-        
-        if message_type == 'text':
-            handle_text_message(message)
-        elif message_type == 'image':
-            handle_image_message(message)
-        else:
-            # Handle other message types
-            unsupported_message = (
-                "🤖 *I can only process:*\n"
-                "📝 Text messages\n"
-                "📸 Food images\n\n"
-                "Please send me a *food photo* for nutrition analysis!\n\n"
-                "Type '*help*' if you need assistance. 💡"
-            )
-            whatsapp_bot.send_message(sender, unsupported_message)
-            
-    except Exception as e:
-        logger.error(f"Error processing message: {e}")
+    def handle_registration_process(self, phone_number: str, message_text: str) -> None:
+        """Handle user registration process"""
         try:
-            whatsapp_bot.send_message(
-                message.get('from', ''), 
-                "❌ *Something went wrong!* Please try again in a moment. 🔄"
-            )
-        except:
-            pass
+            session = self.db_manager.get_registration_session(phone_number)
+            
+            if not session:
+                # Start new registration
+                temp_data = {'name': message_text}
+                self.db_manager.update_registration_session(phone_number, 'address', temp_data)
+                self.send_message(phone_number, self.language_manager.get_message('en', 'registration_address'))
+                
+            elif session['current_step'] == 'address':
+                # Collect address
+                temp_data = session['temp_data']
+                temp_data['address'] = message_text
+                self.db_manager.update_registration_session(phone_number, 'language', temp_data)
+                
+                # Send language selection options
+                language_options = self.language_manager.get_language_options_text('en')
+                self.send_message(phone_number, language_options)
+                
+            elif session['current_step'] == 'language':
+                # Validate and complete registration
+                if self.language_manager.is_valid_language(message_text.lower()):
+                    temp_data = session['temp_data']
+                    success = self.db_manager.create_user(
+                        phone_number, 
+                        temp_data['name'], 
+                        temp_data['address'], 
+                        message_text.lower()
+                    )
+                    
+                    if success:
+                        completion_message = self.language_manager.get_message(
+                            message_text.lower(), 'registration_complete'
+                        )
+                        self.send_message(phone_number, completion_message)
+                    else:
+                        self.send_message(phone_number, "❌ Registration failed. Please try again.")
+                else:
+                    invalid_message = self.language_manager.get_message('en', 'invalid_language')
+                    self.send_message(phone_number, invalid_message)
+                    
+        except Exception as e:
+            logger.error(f"Error in registration process: {e}")
+            self.send_message(phone_number, "❌ Registration error. Please try again.")
+    
+    def handle_stats_request(self, user: Dict, language: str) -> None:
+        """Handle user statistics request"""
+        try:
+            stats = self.db_manager.get_user_stats(user['id'])
+            
+            if language == 'ta':
+                stats_message = f"📊 **உங்கள் புள்ளிவிவரங்கள்**\n\n"
+                stats_message += f"🔍 மொத்த பகுப்பாய்வுகள்: {stats['total_analyses']}\n"
+                if stats['language_usage']:
+                    stats_message += f"\n📈 மொழி பயன்பாடு:\n"
+                    for lang_stat in stats['language_usage']:
+                        stats_message += f"• {lang_stat['native_name']}: {lang_stat['usage_count']}\n"
+            elif language == 'hi':
+                stats_message = f"📊 **आपकी आंकड़े**\n\n"
+                stats_message += f"🔍 कुल विश्लेषण: {stats['total_analyses']}\n"
+                if stats['language_usage']:
+                    stats_message += f"\n📈 भाषा उपयोग:\n"
+                    for lang_stat in stats['language_usage']:
+                        stats_message += f"• {lang_stat['native_name']}: {lang_stat['usage_count']}\n"
+            else:
+                stats_message = f"📊 **Your Statistics**\n\n"
+                stats_message += f"🔍 Total Analyses: {stats['total_analyses']}\n"
+                if stats['language_usage']:
+                    stats_message += f"\n📈 Language Usage:\n"
+                    for lang_stat in stats['language_usage']:
+                        stats_message += f"• {lang_stat['native_name']}: {lang_stat['usage_count']}\n"
+            
+            self.send_message(user['phone_number'], stats_message)
+            
+        except Exception as e:
+            logger.error(f"Error handling stats request: {e}")
+    
+    def handle_profile_request(self, user: Dict, language: str) -> None:
+        """Handle user profile request"""
+        try:
+            if language == 'ta':
+                profile_message = f"👤 **உங்கள் சுயவிவரம்**\n\n"
+                profile_message += f"📝 பெயர்: {user['name']}\n"
+                profile_message += f"📍 முகவரி: {user['address']}\n"
+                profile_message += f"🌍 மொழி: {user['language_native']}\n"
+                profile_message += f"📅 பதிவு செய்யப்பட்ட தேதி: {user['created_at'].strftime('%Y-%m-%d')}"
+            elif language == 'hi':
+                profile_message = f"👤 **आपकी प्रोफ़ाइल**\n\n"
+                profile_message += f"📝 नाम: {user['name']}\n"
+                profile_message += f"📍 पता: {user['address']}\n"
+                profile_message += f"🌍 भाषा: {user['language_native']}\n"
+                profile_message += f"📅 पंजीकरण तिथि: {user['created_at'].strftime('%Y-%m-%d')}"
+            else:
+                profile_message = f"👤 **Your Profile**\n\n"
+                profile_message += f"📝 Name: {user['name']}\n"
+                profile_message += f"📍 Address: {user['address']}\n"
+                profile_message += f"🌍 Language: {user['language_native']}\n"
+                profile_message += f"📅 Registered: {user['created_at'].strftime('%Y-%m-%d')}"
+            
+            self.send_message(user['phone_number'], profile_message)
+            
+        except Exception as e:
+            logger.error(f"Error handling profile request: {e}")
+    
+    def handle_image_message(self, from_phone: str, media_id: str) -> None:
+        """Handle incoming image messages"""
+        try:
+            phone_number = from_phone.replace('+', '').strip()
+            
+            # Check if user is registered
+            user = self.db_manager.get_user_by_phone(phone_number)
+            if not user or user['registration_status'] != 'completed':
+                welcome_message = self.language_manager.get_message('en', 'registration_name')
+                self.send_message(phone_number, welcome_message)
+                return
+            
+            user_language = user.get('language_code', 'en')
+            
+            # Send analyzing message
+            analyzing_message = self.language_manager.get_message(user_language, 'analyzing')
+            self.send_message(phone_number, analyzing_message)
+            
+            # Download image
+            image_bytes = self.download_media(media_id)
+            if not image_bytes:
+                error_msg = "❌ Failed to download image. Please try again." if user_language == 'en' else "❌ படம் பதிவிறக்க முடியவில்லை. மீண்டும் முயற்சிக்கவும்."
+                self.send_message(phone_number, error_msg)
+                return
+            
+            # Upload to S3
+            file_location = self.s3_manager.upload_image(image_bytes, user['id'])
+            if not file_location:
+                error_msg = "❌ Failed to process image. Please try again." if user_language == 'en' else "❌ படம் செயலாக்க முடியவில்லை. மீண்டும் முயற்சிக்கவும்."
+                self.send_message(phone_number, error_msg)
+                return
+            
+            # Analyze nutrition
+            analysis_result = self.nutrition_analyzer.analyze_food_image(image_bytes, user_language)
+            if not analysis_result:
+                error_msg = "❌ Failed to analyze nutrition. Please try with a clearer image." if user_language == 'en' else "❌ ஊட்டச்சத்து பகுப்பாய்வு தோல்வியடைந்தது. தெளிவான படத்துடன் முயற்சிக்கவும்."
+                self.send_message(phone_number, error_msg)
+                return
+            
+            # Save to database
+            self.db_manager.save_nutrition_analysis(user['id'], file_location, analysis_result, user_language)
+            
+            # Send analysis result
+            self.send_message(phone_number, analysis_result)
+            
+        except Exception as e:
+            logger.error(f"Error handling image message: {e}")
+            error_msg = "❌ Sorry, I encountered an error analyzing your image. Please try again."
+            self.send_message(from_phone, error_msg)
 
-def handle_text_message(message: Dict[str, Any]):
-    """Handle text messages including registration flow"""
-    sender = message.get('from')
-    text_content = message.get('text', {}).get('body', '').strip()
-    
-    # Get user from database
-    user = db_manager.get_user_by_phone(sender)
-    
-    if not user:
-        # User not registered, handle registration flow
-        handle_registration_flow(sender, text_content)
-        return
-    
-    # Handle commands for registered users
-    text_lower = text_content.lower()
-    user_language = user.get('preferred_language', 'en')
-    
-    if text_lower in ['help', 'h', '?', 'info']:
-        help_message = language_manager.get_message(user_language, 'help')
-        whatsapp_bot.send_message(sender, help_message)
-        
-    elif text_lower in ['stats', 'statistics', 'my stats']:
-        handle_stats_request(sender, user_language)
-        
-    elif text_lower in ['profile', 'my profile', 'info']:
-        handle_profile_request(sender, user, user_language)
-        
-    elif text_lower in ['language', 'change language', 'lang']:
-        handle_language_change_request(sender)
-        
-    elif text_lower.startswith('lang:') or text_lower.startswith('language:'):
-        # Handle language change
-        lang_code = text_lower.split(':')[1].strip().lower()
-        handle_language_update(sender, lang_code)
-        
-    else:
-        # Default response for unrecognized text
-        welcome_message = language_manager.get_message(user_language, 'welcome')
-        whatsapp_bot.send_message(sender, welcome_message)
+# Initialize managers
+db_manager = DatabaseManager()
+s3_manager = S3Manager()
+nutrition_analyzer = NutritionAnalyzer()
+language_manager = LanguageManager(db_manager)
+whatsapp_manager = WhatsAppManager(db_manager, s3_manager, nutrition_analyzer, language_manager)
 
-def handle_registration_flow(sender: str, text_content: str):
-    """Handle user registration process"""
-    session = db_manager.get_registration_session(sender)
-    
-    if not session:
-        # Start registration
-        welcome_msg = language_manager.get_message('en', 'registration_name')
-        whatsapp_bot.send_message(sender, welcome_msg)
-        db_manager.update_registration_session(sender, 'name', {})
-        return
-    
-    current_step = session.get('current_step')
-    temp_data = session.get('temp_data', {})
-    
-    if current_step == 'name':
-        # Validate name
-        if len(text_content) < 2 or len(text_content) > 50:
-            whatsapp_bot.send_message(sender, "❌ Please enter a valid name (2-50 characters):")
-            return
-            
-        temp_data['name'] = text_content
-        address_msg = language_manager.get_message('en', 'registration_address')
-        whatsapp_bot.send_message(sender, address_msg)
-        db_manager.update_registration_session(sender, 'address', temp_data)
+@app.route('/webhook', methods=['GET', 'POST'])
+def webhook():
+    """Handle WhatsApp webhook"""
+    if request.method == 'GET':
+        # Webhook verification
+        mode = request.args.get('hub.mode')
+        token = request.args.get('hub.verify_token')
+        challenge = request.args.get('hub.challenge')
         
-    elif current_step == 'address':
-        # Validate address
-        if len(text_content) < 5 or len(text_content) > 200:
-            whatsapp_bot.send_message(sender, "❌ Please enter a valid address (5-200 characters):")
-            return
-            
-        temp_data['address'] = text_content
-        language_msg = language_manager.get_message('en', 'registration_language')
-        whatsapp_bot.send_message(sender, language_msg)
-        db_manager.update_registration_session(sender, 'language', temp_data)
-        
-    elif current_step == 'language':
-        # Validate language selection
-        lang_code = text_content.lower().strip()
-        valid_languages = ['en', 'ta', 'te', 'hi', 'kn', 'ml', 'mr', 'gu', 'bn']
-        
-        if lang_code not in valid_languages:
-            whatsapp_bot.send_message(
-                sender, 
-                "❌ Invalid language code. Please choose from: EN, TA, TE, HI, KN, ML, MR, GU, BN"
-            )
-            return
-        
-        temp_data['language'] = lang_code
-        
-        # Complete registration
-        success = db_manager.create_user(
-            sender, 
-            temp_data['name'], 
-            temp_data['address'], 
-            temp_data['language']
-        )
-        
-        if success:
-            complete_msg = language_manager.get_message(lang_code, 'registration_complete')
-            whatsapp_bot.send_message(sender, complete_msg)
-            
-            # Send welcome message in chosen language
-            welcome_msg = language_manager.get_message(lang_code, 'welcome')
-            whatsapp_bot.send_message(sender, welcome_msg)
+        if mode == 'subscribe' and token == VERIFY_TOKEN:
+            logger.info("Webhook verified successfully")
+            return challenge
         else:
-            whatsapp_bot.send_message(sender, "❌ Registration failed. Please try again later.")
-
-def handle_image_message(message: Dict[str, Any]):
-    """Handle image messages for nutrition analysis"""
-    sender = message.get('from')
-    image_data = message.get('image', {})
-    media_id = image_data.get('id')
+            logger.warning("Webhook verification failed")
+            return 'Verification failed', 403
     
-    if not media_id:
-        whatsapp_bot.send_message(sender, "❌ No image found. Please send a valid food image.")
-        return
-    
-    # Check if user is registered
-    user = db_manager.get_user_by_phone(sender)
-    if not user:
-        welcome_msg = language_manager.get_message('en', 'registration_name')
-        whatsapp_bot.send_message(sender, welcome_msg)
-        db_manager.update_registration_session(sender, 'name', {})
-        return
-    
-    user_language = user.get('preferred_language', 'en')
-    
-    try:
-        # Send analyzing message
-        analyzing_msg = language_manager.get_message(user_language, 'analyzing')
-        whatsapp_bot.send_message(sender, analyzing_msg)
-        
-        # Download image
-        image_bytes = whatsapp_bot.download_media(media_id)
-        
-        # Convert to PIL Image
-        image = Image.open(io.BytesIO(image_bytes))
-        
-        # Resize if too large (to manage API limits)
-        max_size = 1024
-        if max(image.size) > max_size:
-            image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+    elif request.method == 'POST':
+        # Handle incoming messages
+        try:
+            data = request.get_json()
+            logger.info(f"Received webhook data: {json.dumps(data, indent=2)}")
             
-            # Convert back to bytes
-            img_byte_arr = io.BytesIO()
-            image.save(img_byte_arr, format='JPEG', quality=85)
-            image_bytes = img_byte_arr.getvalue()
+            # Clean up old registration sessions periodically
+            if random.randint(1, 100) == 1:  # 1% chance
+                db_manager.cleanup_old_registration_sessions()
+            
+            if 'entry' in data:
+                for entry in data['entry']:
+                    if 'changes' in entry:
+                        for change in entry['changes']:
+                            if change.get('field') == 'messages':
+                                if 'messages' in change['value']:
+                                    for message in change['value']['messages']:
+                                        from_phone = message['from']
+                                        message_type = message.get('type')
+                                        
+                                        if message_type == 'text':
+                                            text_body = message['text']['body']
+                                            whatsapp_manager.handle_text_message(from_phone, text_body)
+                                            
+                                        elif message_type == 'image':
+                                            media_id = message['image']['id']
+                                            whatsapp_manager.handle_image_message(from_phone, media_id)
+            
+            return jsonify({'status': 'success'}), 200
+            
+        except Exception as e:
+            logger.error(f"Error processing webhook: {e}")
+            return jsonify({'error': 'Internal server error'}), 500
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    try:
+        # Test database connection
+        conn = db_manager.get_connection()
+        conn.close()
         
-        # Upload to S3
-        image_url, s3_key = s3_manager.upload_image(image_bytes, sender)
-        
-        if not image_url:
-            whatsapp_bot.send_message(sender, "❌ Failed to process image. Please try again.")
-            return
-        
-        # Analyze with Gemini
-        analysis_result = analyzer.analyze_image(image, user_language)
-        
-        # Save to database
-        db_manager.save_nutrition_analysis(sender, image_url, s3_key, analysis_result)
-        
-        # Send analysis result
-        whatsapp_bot.send_message(sender, analysis_result)
-        
-        # Send follow-up message
-        followup_msg = get_followup_message(user_language)
-        whatsapp_bot.send_message(sender, followup_msg)
+        return jsonify({
+            'status': 'healthy',
+            'timestamp': datetime.now().isoformat(),
+            'services': {
+                'database': 'connected',
+                'gemini_ai': 'configured',
+                's3': 'configured'
+            }
+        }), 200
         
     except Exception as e:
-        logger.error(f"Error processing image from {sender}: {e}")
-        error_msg = get_error_message(user_language)
-        whatsapp_bot.send_message(sender, error_msg)
+        logger.error(f"Health check failed: {e}")
+        return jsonify({
+            'status': 'unhealthy',
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
 
-def handle_stats_request(sender: str, language: str):
-    """Handle user statistics request"""
-    stats = db_manager.get_user_stats(sender)
-    
-    if language == 'ta':
-        stats_msg = f"""📊 **உங்கள் ஊட்டச்சத்து பகுப்பாய்வு புள்ளிவிவரங்கள்**
-
-🔢 **மொத்த பகுப்பாய்வுகள்:** {stats['total_analyses']}
-
-📅 **சமீபத்திய செயல்பாடு:**"""
-    elif language == 'hi':
-        stats_msg = f"""📊 **आपके पोषण विश्लेषण आंकड़े**
-
-🔢 **कुल विश्लेषण:** {stats['total_analyses']}
-
-📅 **हाल की गतिविधि:**"""
-    else:
-        stats_msg = f"""📊 **Your Nutrition Analysis Statistics**
-
-🔢 **Total Analyses:** {stats['total_analyses']}
-
-📅 **Recent Activity:**"""
-    
-    if stats['recent_analyses']:
-        for day_stat in stats['recent_analyses'][:5]:
-            date_str = day_stat['analysis_date'].strftime('%Y-%m-%d')
-            count = day_stat['daily_count']
-            stats_msg += f"\n• {date_str}: {count} analysis{'es' if count > 1 else ''}"
-    else:
-        no_data_msg = "No recent activity" if language == 'en' else "சமீபத்திய செயல்பாடு இல்லை" if language == 'ta' else "कोई हाल की गतिविधि नहीं"
-        stats_msg += f"\n{no_data_msg}"
-    
-    whatsapp_bot.send_message(sender, stats_msg)
-
-def handle_profile_request(sender: str, user: Dict, language: str):
-    """Handle user profile request"""
-    name = user.get('name', 'Not set')
-    address = user.get('address', 'Not set')
-    lang_name = language_manager.get_language_name(user.get('preferred_language', 'en'))
-    registration_date = user.get('created_at', '').strftime('%Y-%m-%d') if user.get('created_at') else 'Unknown'
-    
-    if language == 'ta':
-        profile_msg = f"""👤 **உங்கள் சுயவிவரம்**
-
-📛 **பெயர்:** {name}
-📍 **முகவரி:** {address}
-🌍 **மொழி:** {lang_name}
-📅 **பதிவு தேதி:** {registration_date}
-
-💡 மொழி மாற்ற 'language' என்று டைப் செய்யவும்"""
-    elif language == 'hi':
-        profile_msg = f"""👤 **आपकी प्रोफ़ाइल**
-
-📛 **नाम:** {name}
-📍 **पता:** {address}
-🌍 **भाषा:** {lang_name}
-📅 **पंजीकरण तिथि:** {registration_date}
-
-💡 भाषा बदलने के लिए 'language' टाइप करें"""
-    else:
-        profile_msg = f"""👤 **Your Profile**
-
-📛 **Name:** {name}
-📍 **Address:** {address}
-🌍 **Language:** {lang_name}
-📅 **Registration Date:** {registration_date}
-
-💡 Type 'language' to change your language preference"""
-    
-    whatsapp_bot.send_message(sender, profile_msg)
-
-def handle_language_change_request(sender: str):
-    """Handle language change request"""
-    language_options = language_manager.get_language_options_text()
-    instruction_msg = f"""{language_options}
-
-💬 **Reply with:** `lang:CODE`
-📝 **Example:** `lang:ta` for Tamil
-
-Available codes: EN, TA, TE, HI, KN, ML, MR, GU, BN"""
-    
-    whatsapp_bot.send_message(sender, instruction_msg)
-
-def handle_language_update(sender: str, lang_code: str):
-    """Handle language preference update"""
-    valid_languages = ['en', 'ta', 'te', 'hi', 'kn', 'ml', 'mr', 'gu', 'bn']
-    
-    if lang_code not in valid_languages:
-        whatsapp_bot.send_message(sender, "❌ Invalid language code. Use: EN, TA, TE, HI, KN, ML, MR, GU, BN")
-        return
-    
-    # Update user language in database
+@app.route('/stats', methods=['GET'])
+def get_system_stats():
+    """Get system statistics endpoint"""
     try:
         conn = db_manager.get_connection()
         cursor = conn.cursor()
         
-        cursor.execute(
-            "UPDATE users SET preferred_language = %s, updated_at = CURRENT_TIMESTAMP WHERE phone_number = %s",
-            (lang_code, sender)
-        )
+        # Get total users
+        cursor.execute("SELECT COUNT(*) FROM users WHERE registration_status = 'completed'")
+        total_users = cursor.fetchone()[0]
         
-        conn.commit()
-        cursor.close()
-        conn.close()
+        # Get total analyses
+        cursor.execute("SELECT COUNT(*) FROM nutrition_analysis")
+        total_analyses = cursor.fetchone()[0]
         
-        lang_name = language_manager.get_language_name(lang_code)
-        success_msg = language_manager.get_message(lang_code, 'welcome')
-        
-        confirmation = f"✅ Language updated to {lang_name}!\n\n{success_msg}"
-        whatsapp_bot.send_message(sender, confirmation)
-        
-    except Exception as e:
-        logger.error(f"Error updating language for {sender}: {e}")
-        whatsapp_bot.send_message(sender, "❌ Failed to update language. Please try again.")
-
-def get_followup_message(language: str) -> str:
-    """Get follow-up message after analysis"""
-    messages = {
-        'en': "✨ *Analysis complete!* Send another food photo anytime for more nutrition insights! 📸\n\nType '*help*' for assistance or '*stats*' to see your analysis history.",
-        'ta': "✨ *பகுப்பாய்வு முடிந்தது!* மேலும் ஊட்டச்சத்து தகவல்களுக்கு எந்த நேரத்திலும் மற்றொரு உணவு புகைப்படத்தை அனுப்பவும்! 📸",
-        'hi': "✨ *विश्लेषण पूरा!* अधिक पोषण जानकारी के लिए कभी भी दूसरी खाने की तस्वीर भेजें! 📸"
-    }
-    return messages.get(language, messages['en'])
-
-def get_error_message(language: str) -> str:
-    """Get error message in user's language"""
-    messages = {
-        'en': "❌ *Sorry, something went wrong!* 😔\n\n🔄 Please try again with:\n• A clearer photo\n• Better lighting\n• Food clearly visible\n\nType '*help*' if you need assistance!",
-        'ta': "❌ *மன்னிக்கவும், ஏதோ தவறு நடந்தது!* 😔\n\n🔄 தயவுசெய்து மீண்டும் முயற்சிக்கவும்:\n• தெளிவான புகைப்படம்\n• சிறந்த வெளிச்சம்\n• உணவு தெளிவாக தெரியும்",
-        'hi': "❌ *माफ़ करें, कुछ गलत हुआ!* 😔\n\n🔄 कृपया फिर से कोशिश करें:\n• स्पष्ट तस्वीर के साथ\n• बेहतर रोशनी में\n• खाना स्पष्ट रूप से दिखाई दे"
-    }
-    return messages.get(language, messages['en'])
-
-@app.route('/admin/stats', methods=['GET'])
-def admin_stats():
-    """Admin endpoint for system statistics"""
-    try:
-        conn = db_manager.get_connection()
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        
-        # Get user statistics
-        cursor.execute("SELECT COUNT(*) as total_users FROM users WHERE registration_status = 'completed'")
-        total_users = cursor.fetchone()['total_users']
-        
-        cursor.execute("SELECT COUNT(*) as total_analyses FROM nutrition_analysis")
-        total_analyses = cursor.fetchone()['total_analyses']
-        
+        # Get analyses by language
         cursor.execute("""
-            SELECT DATE(created_at) as date, COUNT(*) as count 
+            SELECT l.name, l.native_name, COUNT(*) as count
+            FROM nutrition_analysis na
+            JOIN languages l ON na.language_id = l.id
+            GROUP BY l.id, l.name, l.native_name
+            ORDER BY count DESC
+        """)
+        language_stats = cursor.fetchall()
+        
+        # Get recent activity (last 7 days)
+        cursor.execute("""
+            SELECT DATE(created_at) as date, COUNT(*) as analyses
             FROM nutrition_analysis 
             WHERE created_at >= NOW() - INTERVAL '7 days'
             GROUP BY DATE(created_at)
@@ -996,61 +1130,36 @@ def admin_stats():
         """)
         recent_activity = cursor.fetchall()
         
-        cursor.execute("""
-            SELECT preferred_language, COUNT(*) as count
-            FROM users 
-            WHERE registration_status = 'completed'
-            GROUP BY preferred_language
-            ORDER BY count DESC
-        """)
-        language_stats = cursor.fetchall()
-        
         cursor.close()
         conn.close()
         
         return jsonify({
             'total_users': total_users,
             'total_analyses': total_analyses,
-            'recent_activity': [dict(row) for row in recent_activity],
-            'language_distribution': [dict(row) for row in language_stats],
+            'language_stats': [{'language': row[0], 'native_name': row[1], 'count': row[2]} for row in language_stats],
+            'recent_activity': [{'date': row[0].isoformat(), 'analyses': row[1]} for row in recent_activity],
             'timestamp': datetime.now().isoformat()
-        })
+        }), 200
         
     except Exception as e:
-        logger.error(f"Error getting admin stats: {e}")
-        return jsonify({'error': 'Failed to fetch statistics'}), 500
-
-@app.route('/admin/cleanup', methods=['POST'])
-def admin_cleanup():
-    """Admin endpoint to cleanup old data"""
-    try:
-        db_manager.cleanup_old_registration_sessions()
-        return jsonify({'message': 'Cleanup completed successfully'})
-    except Exception as e:
-        logger.error(f"Cleanup error: {e}")
-        return jsonify({'error': 'Cleanup failed'}), 500
-
-@app.errorhandler(404)
-def not_found(error):
-    return jsonify({'error': 'Endpoint not found'}), 404
-
-@app.errorhandler(500)
-def internal_error(error):
-    logger.error(f"Internal server error: {error}")
-    return jsonify({'error': 'Internal server error'}), 500
+            logger.error(f"Error getting system stats: {e}")
+            return jsonify({'error': 'Internal server error'}), 500
 
 if __name__ == '__main__':
-    # Perform startup cleanup
+    # Initialize database tables on startup
     try:
-        db_manager.cleanup_old_registration_sessions()
-        logger.info("Startup cleanup completed")
+        db_manager.create_tables()
+        logger.info("Database tables initialized successfully")
     except Exception as e:
-        logger.warning(f"Startup cleanup failed: {e}")
+        logger.error(f"Failed to initialize database: {e}")
     
-    # Start the Flask application
-    port = int(os.getenv('PORT', 5000))
-    debug_mode = os.getenv('FLASK_ENV') == 'development'
+    # Configure Gemini AI
+    if GEMINI_API_KEY:
+        genai.configure(api_key=GEMINI_API_KEY)
+        logger.info("Gemini AI configured successfully")
+    else:
+        logger.warning("Gemini API key not found")
     
-    logger.info(f"Starting WhatsApp Nutrition Analyzer Bot on port {port}")
-    app.run(host='0.0.0.0', port=port, debug=debug_mode)
-
+    # Start Flask app
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
