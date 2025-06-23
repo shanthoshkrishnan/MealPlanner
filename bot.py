@@ -108,6 +108,12 @@ class DatabaseManager:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """)
+            try:
+                cursor.execute("""
+                    ALTER TABLE nutrition_analysis DROP COLUMN IF EXISTS phone_number;
+              """)
+            except Exception:
+                pass  # Column might not exist
             
             # Create nutrition_analysis table (only user_id, no phone_number)
             cursor.execute("""
@@ -382,10 +388,15 @@ class DatabaseManager:
         
             if not cursor.fetchone():
                 # Add user_id column 
-                cursor.execute("ALTER TABLE users ADD COLUMN user_id SERIAL;")
-                # Make it primary key if no primary key exists
-                cursor.execute("ALTER TABLE users ADD PRIMARY KEY (user_id);")
+                cursor.execute("ALTER TABLE users ADD COLUMN user_id SERIAL PRIMARY KEY;")
                 logger.info("Added user_id column to users table")
+
+            try:
+                cursor.execute("ALTER TABLE users DROP COLUMN IF EXISTS address;")
+                cursor.execute("ALTER TABLE users DROP COLUMN IF EXISTS email;")
+                logger.info("Removed address and email columns from users table")
+            except Exception as e:
+                logger.warning(f"Could not remove address/email columns: {e}")
         
             conn.commit()
             cursor.close()
@@ -719,8 +730,7 @@ def process_message(message: Dict[str, Any]):
                 "Please send me a *food photo* for nutrition analysis!\n\n"
                 "Type '*help*' if you need assistance."
             )
-
-        whatsapp_bot.send_message(sender, unsupported_message)
+            whatsapp_bot.send_message(sender, unsupported_message)
             
     except Exception as e:
         logger.error(f"Error processing message: {e}")
@@ -804,6 +814,12 @@ def handle_image_message(message: Dict[str, Any]):
             # Analyze image
             analysis_result = analyzer.analyze_image(image, user_language)
             
+            if 'user_id' not in user or user['user_id'] is None:
+                logger.error(f"User {sender} does not have user_id")
+                error_message = "❌ User registration incomplete. Please type 'start' to re-register."
+                whatsapp_bot.send_message(sender, error_message)
+                return
+
             # Save analysis to database
             db_manager.save_nutrition_analysis(
                 user['user_id'], 
