@@ -587,40 +587,72 @@ class LanguageManager:
         try:
             # Try to load from the same directory as the script
             messages_path = os.path.join(os.path.dirname(__file__), 'messages.json')
+            logger.info(f"Trying to load messages from: {messages_path}")
+        
             if not os.path.exists(messages_path):
-                # Try current directory
+            # Try current directory
                 messages_path = 'messages.json'
-            
+                logger.info(f"Trying alternative path: {messages_path}")
+        
+            if not os.path.exists(messages_path):
+                logger.error(f"messages.json not found at {messages_path}")
+                raise FileNotFoundError(f"messages.json not found")
+        
             with open(messages_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                messages = json.load(f)
+            
+            logger.info(f"Successfully loaded messages with languages: {list(messages.keys())}")
+        
+            # Check if Tamil exists
+            if 'ta' in messages:
+                logger.info(f"Tamil messages loaded with keys: {list(messages['ta'].keys())}")
+            else:
+                logger.error("Tamil ('ta') language not found in messages.json")
+            
+            return messages
+        
         except Exception as e:
             logger.error(f"Error loading messages.json: {e}")
             # Fallback to basic English messages
             return {
                 'en': {
                     'welcome': "👋 Hello! I'm your AI Nutrition Analyzer bot! Send me a photo of any food for detailed nutritional analysis.",
-                    'language_selection': "Please select your preferred language for nutrition analysis.",
-                    'ask_name': "Please enter your full name:",
-                    'registration_complete': "✅ Registration completed successfully! You can now send me food photos for nutrition analysis.",
-                    'analyzing': "🔍 Analyzing your food image... This may take a few moments.",
-                    'help': "Send me a food photo to get detailed nutrition analysis. Type 'language' to change your language preference.",
-                    'language_changed': "✅ Language updated successfully!",
-                    'language_change_failed': "❌ Failed to update language. Please try again.",
-                    'invalid_language': "❌ Invalid language selection. Please select from the available options.",
-                    'unsupported_message': "🤖 I can only process text messages and food images. Please send me a food photo for nutrition analysis!",
-                    'registration_failed': "❌ Registration failed. Please try again by typing 'start'.",
-                    'invalid_name': "📝 Please enter a valid name (at least 2 characters):",
-                    'image_processing_error': "❌ Sorry, I couldn't analyze your image. Please try again with a clearer photo of your food.",
-                    'followup_message': "📸 Send me another food photo for more analysis! Type 'help' for assistance.",
-                    'no_registration_session': "❌ No registration session found. Please type 'start' to begin.",
-                    'user_incomplete': "❌ User registration incomplete. Please type 'start' to re-register.",
-                    'unknown_command': "❓ I didn't understand that command. Type 'help' for assistance or send me a food photo for analysis."
-                }
+                'language_selection': "Please select your preferred language for nutrition analysis.",
+                'ask_name': "Please enter your full name:",
+                'registration_complete': "✅ Registration completed successfully! You can now send me food photos for nutrition analysis.",
+                'analyzing': "🔍 Analyzing your food image... This may take a few moments.",
+                'help': "Send me a food photo to get detailed nutrition analysis. Type 'language' to change your language preference.",
+                'language_changed': "✅ Language updated successfully!",
+                'language_change_failed': "❌ Failed to update language. Please try again.",
+                'invalid_language': "❌ Invalid language selection. Please select from the available options.",
+                'unsupported_message': "🤖 I can only process text messages and food images. Please send me a food photo for nutrition analysis!",
+                'registration_failed': "❌ Registration failed. Please try again by typing 'start'.",
+                'invalid_name': "📝 Please enter a valid name (at least 2 characters):",
+                'image_processing_error': "❌ Sorry, I couldn't analyze your image. Please try again with a clearer photo of your food.",
+                'followup_message': "📸 Send me another food photo for more analysis! Type 'help' for assistance.",
+                'no_registration_session': "❌ No registration session found. Please type 'start' to begin.",
+                'user_incomplete': "❌ User registration incomplete. Please type 'start' to re-register.",
+                'unknown_command': "❓ I didn't understand that command. Type 'help' for assistance or send me a food photo for analysis."
             }
-    
+        }
     def get_message(self, language: str, key: str) -> str:
         """Get message in specified language"""
-        return self.messages.get(language, self.messages.get('en', {})).get(key, self.messages.get('en', {}).get(key, f"Message not found: {key}"))
+        # Add debugging
+        logger.info(f"Getting message for language: '{language}', key: '{key}'")
+        logger.info(f"Available languages: {list(self.messages.keys())}")
+    
+        if language in self.messages:
+            if key in self.messages[language]:
+                return self.messages[language][key]
+            else:
+                logger.error(f"Key '{key}' not found in language '{language}'. Available keys: {list(self.messages[language].keys())}")
+        else:
+            logger.error(f"Language '{language}' not found in messages")
+    
+        # Fallback to English
+        fallback_msg = self.messages.get('en', {}).get(key, f"Message not found: {key}")
+        logger.info(f"Using fallback message: {fallback_msg}")
+        return fallback_msg
     
     def get_language_name(self, code: str) -> str:
         """Get language name by code"""
