@@ -943,7 +943,7 @@ class NutritionAnalyzer:
             message_parts.append("💪 HEALTH ANALYSIS")
             health_score = health_analysis.get('health_score', 0)
             health_grade = health_analysis.get('health_grade', 'N/A')
-            message_parts.append(f"• Health Score: {health_score}/10 (Grade: {health_grade})")
+            message_parts.append(f"• Health Score: {health_score}/100 (Grade: {health_grade})")
             
             strengths = health_analysis.get('nutritional_strengths', [])
             if strengths:
