@@ -173,6 +173,24 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Database initialization error: {e}")
             raise
+    
+    def _safe_drop_columns(self, conn, cursor):
+        """Safely drop columns with proper transaction handling"""
+        columns_to_drop = [
+            ("nutrition_analysis", "phone_number"),
+            ("users", "address"),
+            ("users", "email")
+        ]
+    
+        for table_name, column_name in columns_to_drop:
+            try:
+                cursor.execute(f"ALTER TABLE {table_name} DROP COLUMN IF EXISTS {column_name};")
+                conn.commit()
+            except Exception as e:
+                logger.warning(f"Could not drop {column_name} from {table_name}: {e}")
+                conn.rollback()
+                # Continue with a fresh transaction
+                cursor = conn.cursor()
 
     def get_language_message(self, language_code: str, message_key: str) -> Optional[str]:
         """Get language message from database"""
