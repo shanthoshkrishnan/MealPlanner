@@ -1936,15 +1936,48 @@ def bsp_get_user(phone_number):
 def bsp_update_user_language(phone_number):
     """BSP endpoint to update user language"""
     try:
-        data = request.get_json()
+        # Handle different content types
+        data = {}
         
+        if request.is_json:
+            # JSON request
+            data = request.get_json() or {}
+        elif request.form:
+            # Form data request
+            data = {
+                'language': request.form.get('language')
+            }
+        else:
+            # Try to parse as JSON anyway (fallback)
+            try:
+                data = request.get_json(force=True) or {}
+            except:
+                data = {}
+        
+        # Clean up data - remove None values and empty strings
+        data = {k: v for k, v in data.items() if v is not None and v != ''}
+        
+        # Validate phone number
+        if not phone_number or not phone_number.strip():
+            return jsonify({
+                'status': 'error',
+                'message': 'Valid phone number required'
+            }), 400
+        
+        # Validate language data
         if not data or 'language' not in data:
             return jsonify({
                 'status': 'error',
                 'message': 'Language code required'
             }), 400
         
-        language_code = data['language']
+        language_code = data['language'].strip()
+        
+        if not language_code:
+            return jsonify({
+                'status': 'error',
+                'message': 'Language code cannot be empty'
+            }), 400
         
         # Validate language code
         if language_code not in language_manager.languages:
@@ -1953,25 +1986,53 @@ def bsp_update_user_language(phone_number):
                 'message': f'Invalid language code. Supported: {list(language_manager.languages.keys())}'
             }), 400
         
+        # Check if user exists first
+        try:
+            user = db_manager.get_user_by_phone(phone_number)
+            if not user:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'User not found'
+                }), 404
+        except Exception as e:
+            logger.error(f"Error checking user existence: {e}")
+            return jsonify({
+                'status': 'error',
+                'message': 'Failed to verify user'
+            }), 500
+        
         # Update user language
-        success = db_manager.update_user_language(phone_number, language_code)
+        try:
+            success = db_manager.update_user_language(phone_number, language_code)
+        except Exception as e:
+            logger.error(f"Database update error: {e}")
+            return jsonify({
+                'status': 'error',
+                'message': 'Failed to update language in database'
+            }), 500
         
         if success:
-            language_name = language_manager.get_language_name(language_code)
+            try:
+                language_name = language_manager.get_language_name(language_code)
+            except Exception as e:
+                logger.error(f"Error getting language name: {e}")
+                language_name = language_code  # Fallback to code
+            
             return jsonify({
                 'status': 'success',
                 'message': f'Language updated to {language_name}',
                 'data': {
                     'phone_number': phone_number,
                     'language_code': language_code,
-                    'language_name': language_name
+                    'language_name': language_name,
+                    'user_id': user.get('user_id') if user else None
                 }
             }), 200
         else:
             return jsonify({
                 'status': 'error',
-                'message': 'Failed to update language or user not found'
-            }), 404
+                'message': 'Failed to update language'
+            }), 500
         
     except Exception as e:
         logger.error(f"BSP update language error: {e}")
