@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+import urllib
 import google.generativeai as genai
 import os
 import requests
@@ -6,7 +7,6 @@ from PIL import Image
 import io
 import json
 import logging
-import time
 from typing import Dict, Any, Optional
 import uuid
 import psycopg2
@@ -14,7 +14,6 @@ from psycopg2.extras import RealDictCursor
 import boto3
 from botocore.exceptions import ClientError
 from datetime import datetime
-import re
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 from typing import List, Tuple
@@ -44,17 +43,28 @@ AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 AWS_S3_BUCKET = os.getenv('AWS_S3_BUCKET')
 AWS_REGION = os.getenv('AWS_REGION', 'us-east-1')
 
+# 11za Configuration
+AUTH_TOKEN = os.environ.get("ELEVENZA_AUTH_TOKEN") or os.environ.get("AUTH_TOKEN")
+ORIGIN_WEBSITE = os.environ.get("ELEVENZA_ORIGIN_WEBSITE") or os.environ.get("ORIGIN_WEBSITE")
+SEND_MESSAGE_URL = os.environ.get("ELEVENZA_SEND_MESSAGE_URL", "https://api.11za.in/apis/sendMessage/sendMessages")
+
 # Validation
 required_env_vars = [
     'GEMINI_API_KEY', 'WHATSAPP_TOKEN', 'WHATSAPP_PHONE_NUMBER_ID', 
     'WEBHOOK_VERIFY_TOKEN', 'DATABASE_URL', 'AWS_ACCESS_KEY_ID', 
-    'AWS_SECRET_ACCESS_KEY', 'AWS_S3_BUCKET'
+    'AWS_SECRET_ACCESS_KEY', 'AWS_S3_BUCKET','AUTH_TOKEN','ORIGIN_WEBSITE'
 ]
 
 missing_vars = [var for var in required_env_vars if not os.getenv(var)]
 if missing_vars:
     logger.error(f"Missing required environment variables: {missing_vars}")
     raise ValueError(f"Missing required environment variables: {missing_vars}")
+
+# Validate 11za required environment variables
+if not AUTH_TOKEN:
+    raise ValueError("ELEVENZA_AUTH_TOKEN or AUTH_TOKEN environment variable is required")
+if not ORIGIN_WEBSITE:
+    raise ValueError("ELEVENZA_ORIGIN_WEBSITE or ORIGIN_WEBSITE environment variable is required")
 
 # Configure Gemini API
 try:
@@ -1119,6 +1129,49 @@ class WhatsAppBot:
             logger.error(f"Error downloading media {media_id}: {e}")
             raise
 
+# 11za Bot class to handle message sending
+class ElevenZABot:
+    def __init__(self):
+        self.auth_token = AUTH_TOKEN
+        self.origin_website = ORIGIN_WEBSITE
+        self.send_url = SEND_MESSAGE_URL
+    
+    def send_message(self, to_number: str, message: str):
+        """Send text message via 11za API"""
+        try:
+            payload = json.dumps({
+                "sendto": to_number,
+                "authToken": self.auth_token,
+                "originWebsite": self.origin_website,
+                "contentType": "text",
+                "text": message
+            }).encode("utf-8")
+            
+            req = urllib.request.Request(
+                self.send_url,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            
+            with urllib.request.urlopen(req) as resp:
+                logger.info(f"Message sent to {to_number}: {resp.status}")
+                return resp.status == 200
+                
+        except Exception as e:
+            logger.error(f"Error sending message to {to_number}: {e}")
+            return False
+    
+    def download_media(self, media_url: str) -> bytes:
+        """Download media from 11za URL"""
+        try:
+            req = urllib.request.Request(media_url)
+            with urllib.request.urlopen(req) as response:
+                return response.read()
+        except Exception as e:
+            logger.error(f"Error downloading media from {media_url}: {e}")
+            return None
+
 # Initialize components
 try:
     db_manager = DatabaseManager()
@@ -1126,6 +1179,7 @@ try:
     language_manager = LanguageManager(db_manager)
     analyzer = NutritionAnalyzer()
     whatsapp_bot = WhatsAppBot(WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID)
+    elevenza_bot = ElevenZABot()
     logger.info("All components initialized successfully")
 except Exception as e:
     logger.error(f"Failed to initialize components: {e}")
@@ -1492,574 +1546,330 @@ def handle_registration_flow(sender: str, text: str):
     except Exception as e:
         logger.error(f"Error in registration flow: {e}")
 
-@app.route('/bsp/analyze', methods=['POST'])
-def bsp_analyze():
-    """BSP endpoint for nutrition analysis using existing classes"""
+# Add this new route to your existing Flask app
+@app.route('/webhook/11za', methods=['POST'])
+def handle_11za_webhook():
+    """Handle incoming 11za messages"""
     try:
-        # Initialize variables
-        data = {}
-        files = request.files
+        data = request.get_json()
         
-        # Try to get data from different sources
-        if request.is_json:
-            # JSON request
-            data = request.get_json() or {}
-        elif request.form:
-            # Form data request
-            data = {
-                'phone_number': request.form.get('phone_number'),
-                'user_id': request.form.get('user_id'),
-                'message': request.form.get('message', ''),
-                'language': request.form.get('language', 'en')
-            }
-        else:
-            # Try to parse as JSON anyway (fallback)
-            try:
-                data = request.get_json(force=True) or {}
-            except:
-                data = {}
+        if not data:
+            return jsonify({'status': 'no_data'}), 400
         
-        # Clean up data - remove None values and empty strings
-        data = {k: v for k, v in data.items() if v is not None and v != ''}
+        logger.info(f"11za webhook received: {json.dumps(data)}")
         
-        if not data and not files:
-            return jsonify({
-                'status': 'error',
-                'message': 'No data or files provided'
-            }), 400
+        # Process the 11za message
+        process_11za_message(data)
         
-        # Get user identifier (phone number or user_id)
-        user_phone = data.get('phone_number')
-        user_id = data.get('user_id')
-        message_text = data.get('message', '').strip()
-        language_code = data.get('language', 'en')
-        
-        # Handle file upload (image analysis)
-        if 'image' in files:
-            return handle_bsp_image_analysis(files['image'], user_phone, user_id, language_code)
-        
-        # Handle text message
-        if message_text and user_phone:
-            return handle_bsp_text_message(user_phone, message_text, language_code)
-        
-        return jsonify({
-            'status': 'error',
-            'message': 'Invalid request format. Provide either image file or text message with phone_number'
-        }), 400
+        return jsonify({'status': 'success'}), 200
         
     except Exception as e:
-        logger.error(f"BSP endpoint error: {e}")
-        return jsonify({
-            'status': 'error',
-            'message': f'Internal server error: {str(e)}'
-        }), 500
+        logger.error(f"11za webhook processing error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
-def handle_bsp_image_analysis(image_file, user_phone=None, user_id=None, language_code='en'):
-    """Handle BSP image analysis using existing classes"""
+def process_11za_message(data: Dict[str, Any]):
+    """Process individual 11za message"""
     try:
-        # Validate image file
-        if not image_file or not hasattr(image_file, 'filename') or not image_file.filename:
-            return jsonify({
-                'status': 'error',
-                'message': 'No valid image file provided'
-            }), 400
+        sender = data.get("from")
+        content = data.get("content", {})
+        content_type = content.get("contentType")
         
-        # Check file type
-        allowed_extensions = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
-        file_extension = image_file.filename.rsplit('.', 1)[1].lower() if '.' in image_file.filename else ''
+        logger.info(f"Processing {content_type} message from {sender}")
         
-        if file_extension not in allowed_extensions:
-            return jsonify({
-                'status': 'error',
-                'message': f'Unsupported file type. Allowed: {", ".join(allowed_extensions)}'
-            }), 400
-        
-        # Validate user identifier
-        if not user_phone and not user_id:
-            return jsonify({
-                'status': 'error',
-                'message': 'Either phone_number or user_id must be provided'
-            }), 400
-        
-        # Get or create user
-        user = None
-        if user_phone:
-            user = db_manager.get_user_by_phone(user_phone)
-            if not user:
-                # Create user with basic info for BSP
-                try:
-                    success = db_manager.create_user(
-                        user_phone,
-                        f"BSP_User_{user_phone[-4:]}",  # Generic name
-                        language_code
-                    )
-                    if success:
-                        user = db_manager.get_user_by_phone(user_phone)
-                    else:
-                        return jsonify({
-                            'status': 'error',
-                            'message': 'Failed to create user'
-                        }), 500
-                except Exception as e:
-                    logger.error(f"User creation error: {e}")
-                    return jsonify({
-                        'status': 'error',
-                        'message': 'Failed to create user'
-                    }), 500
-        elif user_id:
-            # For direct user_id usage - validate it exists if possible
-            # If you have a method to validate user_id, use it here
-            user = {'user_id': user_id, 'preferred_language': language_code}
-        
-        if not user or 'user_id' not in user:
-            return jsonify({
-                'status': 'error',
-                'message': 'Invalid user data'
-            }), 400
-        
-        user_language = user.get('preferred_language', language_code)
-        
-        # Read image bytes with size validation
-        image_file.seek(0)  # Reset file pointer
-        image_bytes = image_file.read()
-        
-        if len(image_bytes) == 0:
-            return jsonify({
-                'status': 'error',
-                'message': 'Empty image file'
-            }), 400
-        
-        # Check file size (optional - add reasonable limit)
-        max_file_size = 10 * 1024 * 1024  # 10MB
-        if len(image_bytes) > max_file_size:
-            return jsonify({
-                'status': 'error',
-                'message': f'File too large. Maximum size: {max_file_size // (1024*1024)}MB'
-            }), 400
-        
-        # Convert bytes to PIL Image for validation BEFORE uploading
-        try:
-            image = Image.open(io.BytesIO(image_bytes))
-            # Validate image dimensions
-            if image.width < 50 or image.height < 50:
-                return jsonify({
-                    'status': 'error',
-                    'message': 'Image too small. Minimum size: 50x50 pixels'
-                }), 400
+        if content_type == "text":
+            handle_11za_text_message(sender, content)
+        elif content_type == "media":
+            handle_11za_media_message(sender, content)
+        else:
+            # Handle unsupported message types
+            user = db_manager.get_user_by_phone(sender)
+            user_language = user.get('preferred_language', 'en') if user else 'en'
+            unsupported_message = language_manager.get_message(user_language, 'unsupported_message')
+            elevenza_bot.send_message(sender, unsupported_message)
             
-            # Convert to RGB if necessary (for analysis consistency)
-            if image.mode != 'RGB':
-                image = image.convert('RGB')
-                
-        except Exception as e:
-            logger.error(f"PIL Image validation error: {e}")
-            return jsonify({
-                'status': 'error',
-                'message': 'Invalid image format or corrupted image'
-            }), 400
+    except Exception as e:
+        logger.error(f"Error processing 11za message: {e}")
+
+def handle_11za_text_message(sender: str, content: Dict[str, Any]):
+    """Handle incoming text messages from 11za"""
+    try:
+        text_content = content.get("text", "").strip().lower()
         
-        # Upload to S3 using existing S3Manager
+        logger.info(f"11za text message from {sender}: {text_content}")
+        
+        # Check if user exists
+        user = db_manager.get_user_by_phone(sender)
+        
+        # Handle different text commands (reusing existing logic)
+        if text_content in ['start', 'hello', 'hi', 'hey']:
+            handle_11za_start_command(sender, user)
+        elif text_content == 'help':
+            handle_11za_help_command(sender, user)
+        elif text_content == 'language':
+            handle_11za_language_command(sender)
+        elif is_language_selection(text_content):
+            handle_11za_language_selection(sender, text_content, user)
+        elif not user:
+            # User doesn't exist, start registration
+            handle_11za_registration_flow(sender, text_content)
+        else:
+            # User exists but sent unrecognized text
+            user_language = user.get('preferred_language', 'en') if user else 'en'
+            unknown_message = language_manager.get_message(user_language, 'unknown_command')
+            elevenza_bot.send_message(sender, unknown_message)
+            
+    except Exception as e:
+        logger.error(f"Error handling 11za text message: {e}")
+
+def handle_11za_media_message(sender: str, content: Dict[str, Any]):
+    """Handle incoming media messages from 11za"""
+    try:
+        media_info = content.get("media", {})
+        media_type = media_info.get("type")
+        media_url = media_info.get("url")
+        
+        logger.info(f"11za media message from {sender}, type: {media_type}, url: {media_url}")
+        
+        if media_type != "image":
+            user = db_manager.get_user_by_phone(sender)
+            user_language = user.get('preferred_language', 'en') if user else 'en'
+            unsupported_message = language_manager.get_message(user_language, 'unsupported_message')
+            elevenza_bot.send_message(sender, unsupported_message)
+            return
+        
+        # Check if user exists
+        user = db_manager.get_user_by_phone(sender)
+        if not user:
+            # User doesn't exist, start registration with language
+            welcome_message = language_manager.get_message('en', 'language_selection') + "\n\n" + language_manager.get_language_options_text()
+            elevenza_bot.send_message(sender, welcome_message)
+            db_manager.update_registration_session(sender, 'language', {})
+            return
+        
+        if 'user_id' not in user or user['user_id'] is None:
+            logger.error(f"User {sender} does not have user_id: {user}")
+            user_language = user.get('preferred_language', 'en')
+            error_message = language_manager.get_message(user_language, 'user_incomplete')
+            elevenza_bot.send_message(sender, error_message)
+            return
+        
+        user_language = user.get('preferred_language', 'en')
+        
+        # Send analysis started message
+        analyzing_message = language_manager.get_message(user_language, 'analyzing')
+        elevenza_bot.send_message(sender, analyzing_message)
+        
+        # Download and process image
         try:
+            # Download image from 11za
+            image_bytes = elevenza_bot.download_media(media_url)
+            
+            if not image_bytes:
+                error_message = language_manager.get_message(user_language, 'image_processing_error')
+                elevenza_bot.send_message(sender, error_message)
+                return
+            
+            # Upload to S3
             image_url, file_location = s3_manager.upload_image(image_bytes, user['user_id'])
             
             if not image_url or not file_location:
-                return jsonify({
-                    'status': 'error',
-                    'message': 'Failed to upload image to storage'
-                }), 500
-        except Exception as e:
-            logger.error(f"S3 upload error: {e}")
-            return jsonify({
-                'status': 'error',
-                'message': 'Image upload failed'
-            }), 500
-        
-        # Analyze image using existing NutritionAnalyzer
-        try:
+                error_message = language_manager.get_message(user_language, 'image_processing_error')
+                elevenza_bot.send_message(sender, error_message)
+                return
+            
+            # Convert bytes to PIL Image for analysis
+            image = Image.open(io.BytesIO(image_bytes))
+            
+            # Analyze image - now returns formatted message and structured JSON
             user_message, nutrition_json = analyzer.analyze_image(image, user_language)
             
-            # Validate analysis results
-            if not user_message and not nutrition_json:
-                logger.warning(f"Empty analysis result for user {user['user_id']}")
-                return jsonify({
-                    'status': 'error',
-                    'message': 'Could not analyze the image. Please try with a clearer image of food.'
-                }), 400
-                
-        except Exception as e:
-            logger.error(f"Nutrition analysis error: {e}")
-            return jsonify({
-                'status': 'error',
-                'message': 'Failed to analyze image. Please try again with a clearer image.'
-            }), 500
-        
-        # Save analysis using existing DatabaseManager
-        analysis_saved = False
-        try:
+            # Enhanced logging of structured data
+            if nutrition_json:
+                dish_name = nutrition_json.get('dish_identification', {}).get('name', 'Unknown')
+                calories = nutrition_json.get('nutrition_facts', {}).get('calories', 0)
+                health_score = nutrition_json.get('health_analysis', {}).get('health_score', 0)
+                logger.info(f"Analyzed: {dish_name}, Calories: {calories}, Health Score: {health_score}")
+            
+            # Save analysis with comprehensive nutrient details
             success = db_manager.save_nutrition_analysis(
                 user['user_id'], 
                 file_location, 
-                user_message,
-                nutrition_json
+                user_message,  # The formatted message for display
+                nutrition_json  # The complete structured data
+            )
+            
+            if not success:
+                logger.error(f"Failed to save nutrition analysis for user {user['user_id']}")
+            else:
+                logger.info(f"Successfully saved nutrition analysis for user {user['user_id']}")
+            
+            # Send the formatted analysis result to user
+            elevenza_bot.send_message(sender, user_message)
+            
+            # Optional: Send additional insights if health score is concerning
+            if nutrition_json and nutrition_json.get('health_analysis', {}).get('health_score', 10) < 4:
+                health_warning = get_health_warning_message(user_language)
+                elevenza_bot.send_message(sender, health_warning)
+            
+            # Send follow-up message
+            followup_message = language_manager.get_message(user_language, 'followup_message')
+            elevenza_bot.send_message(sender, followup_message)
+            
+        except Exception as e:
+            logger.error(f"Error processing 11za image: {e}")
+            user_language = user.get('preferred_language', 'en')
+            error_message = language_manager.get_message(user_language, 'image_processing_error')
+            elevenza_bot.send_message(sender, error_message)
+            
+    except Exception as e:
+        logger.error(f"Error handling 11za media message: {e}")
+
+def handle_11za_start_command(sender: str, user: Optional[Dict]):
+    """Handle start/welcome command for 11za"""
+    try:
+        if user:
+            # Existing user
+            user_language = user.get('preferred_language', 'en')
+            welcome_message = language_manager.get_message(user_language, 'welcome')
+        else:
+            # New user - start registration
+            welcome_message = language_manager.get_message('en', 'language_selection') + "\n\n" + language_manager.get_language_options_text()
+            # Start registration session with language step
+            db_manager.update_registration_session(sender, 'language', {})
+        
+        elevenza_bot.send_message(sender, welcome_message)
+        
+    except Exception as e:
+        logger.error(f"Error handling 11za start command: {e}")
+
+def handle_11za_help_command(sender: str, user: Optional[Dict]):
+    """Handle help command for 11za"""
+    try:
+        user_language = user.get('preferred_language', 'en') if user else 'en'
+        help_message = language_manager.get_message(user_language, 'help')
+        elevenza_bot.send_message(sender, help_message)
+        
+    except Exception as e:
+        logger.error(f"Error handling 11za help command: {e}")
+
+def handle_11za_language_command(sender: str):
+    """Handle language selection command for 11za"""
+    try:
+        language_options = language_manager.get_language_options_text()
+        elevenza_bot.send_message(sender, language_options)
+        
+    except Exception as e:
+        logger.error(f"Error handling 11za language command: {e}")
+
+def handle_11za_language_selection(sender: str, text: str, user: Optional[Dict]):
+    """Handle language selection from user for 11za"""
+    try:
+        language_code = get_language_code(text)
+        language_name = language_manager.get_language_name(language_code)
+        
+        if user:
+            # Update existing user's language
+            success = db_manager.update_user_language(sender, language_code)
+            if success:
+                confirmation_message = language_manager.get_message(language_code, 'language_changed') + f" ({language_name})\n\n" + language_manager.get_message(language_code, 'welcome')
+            else:
+                confirmation_message = language_manager.get_message(user.get('preferred_language', 'en'), 'language_change_failed')
+        else:
+            # Handle registration flow
+            session = db_manager.get_registration_session(sender)
+            if session:
+                temp_data = session.get('temp_data', {})
+                temp_data['language'] = language_code
+                
+                # Move to name step
+                db_manager.update_registration_session(sender, 'name', temp_data)
+                confirmation_message = language_manager.get_message(language_code, 'ask_name')
+            else:
+                confirmation_message = language_manager.get_message('en', 'no_registration_session')
+        
+        elevenza_bot.send_message(sender, confirmation_message)
+        
+    except Exception as e:
+        logger.error(f"Error handling 11za language selection: {e}")
+
+def handle_11za_registration_flow(sender: str, text: str):
+    """Handle user registration flow for 11za - Language first, then name"""
+    try:
+        session = db_manager.get_registration_session(sender)
+        
+        if not session:
+            # No session exists, check if it's a language selection
+            if is_language_selection(text):
+                handle_11za_language_selection(sender, text, None)
+            else:
+                # Start with language selection
+                welcome_message = language_manager.get_message('en', 'language_selection') + "\n\n" + language_manager.get_language_options_text()
+                elevenza_bot.send_message(sender, welcome_message)
+                db_manager.update_registration_session(sender, 'language', {})
+            return
+        
+        current_step = session.get('current_step', 'language')
+        temp_data = session.get('temp_data', {})
+        
+        if current_step == 'language':
+            # Handle language selection
+            if is_language_selection(text):
+                handle_11za_language_selection(sender, text, None)
+            else:
+                invalid_message = language_manager.get_message('en', 'invalid_language') + "\n\n" + language_manager.get_language_options_text()
+                elevenza_bot.send_message(sender, invalid_message)
+                
+        elif current_step == 'name':
+            # Handle name input
+            if len(text.strip()) < 2:
+                selected_language = temp_data.get('language', 'en')
+                invalid_name_message = language_manager.get_message(selected_language, 'invalid_name')
+                elevenza_bot.send_message(sender, invalid_name_message)
+                return
+            
+            # Save name and complete registration
+            temp_data['name'] = text.strip().title()
+            selected_language = temp_data.get('language', 'en')
+            
+            # Create user
+            success = db_manager.create_user(
+                sender,
+                temp_data['name'],
+                selected_language
             )
             
             if success:
-                analysis_saved = True
+                completion_message = language_manager.get_message(selected_language, 'registration_complete') + "\n\n" + language_manager.get_message(selected_language, 'welcome')
+                elevenza_bot.send_message(sender, completion_message)
             else:
-                logger.warning(f"Failed to save nutrition analysis for user {user['user_id']}")
-        except Exception as e:
-            logger.error(f"Database save error: {e}")
-            # Don't fail the request if saving fails, but log it
+                failed_message = language_manager.get_message(selected_language, 'registration_failed')
+                elevenza_bot.send_message(sender, failed_message)
+    
+    except Exception as e:
+        logger.error(f"Error in 11za registration flow: {e}")
+
+# Lambda handler for 11za (if you want to deploy this specific part as Lambda)
+def lambda_handler(event, context):
+    """AWS Lambda handler for 11za webhook"""
+    try:
+        body = json.loads(event["body"])
+        logger.info(f"Lambda received: {json.dumps(body)}")
         
-        # Prepare response
-        response_data = {
-            'status': 'success',
-            'message': 'Image analyzed successfully',
-            'data': {
-                'user_message': user_message,
-                'nutrition_analysis': nutrition_json,
-                'image_url': image_url,
-                'language': user_language,
-                'analysis_saved': analysis_saved
-            }
+        # Process the 11za message using existing infrastructure
+        process_11za_message(body)
+        
+        return {
+            "statusCode": 200,
+            "body": json.dumps({"status": "processed"})
         }
         
-        # Add health warning if needed
-        try:
-            if nutrition_json and nutrition_json.get('health_analysis', {}).get('health_score', 10) < 4:
-                health_warning = get_health_warning_message(user_language)
-                response_data['data']['health_warning'] = health_warning
-        except Exception as e:
-            logger.error(f"Health warning generation error: {e}")
-            # Don't fail the request if health warning fails
-        
-        return jsonify(response_data), 200
-        
     except Exception as e:
-        logger.error(f"BSP image analysis error: {e}")
-        return jsonify({
-            'status': 'error',
-            'message': f'Image analysis failed: {str(e)}'
-        }), 500
-
-def handle_bsp_text_message(user_phone, message_text, language_code='en'):
-    """Handle BSP text messages using existing classes"""
-    try:
-        text_content = message_text.lower().strip()
-        
-        # Check if user exists
-        user = db_manager.get_user_by_phone(user_phone)
-        
-        response_data = {
-            'status': 'success',
-            'message': 'Text message processed',
-            'data': {
-                'user_phone': user_phone,
-                'language': language_code,
-                'response_message': ''
-            }
+        logger.error(f"Lambda processing error: {e}")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"status": "error", "message": str(e)})
         }
-        
-        # Handle different text commands using existing logic
-        if text_content in ['start', 'hello', 'hi', 'hey']:
-            if user:
-                user_language = user.get('preferred_language', language_code)
-                welcome_message = language_manager.get_message(user_language, 'welcome')
-                response_data['data']['response_message'] = welcome_message
-                response_data['data']['user_exists'] = True
-            else:
-                welcome_message = (language_manager.get_message('en', 'language_selection') + 
-                                 "\n\n" + language_manager.get_language_options_text())
-                response_data['data']['response_message'] = welcome_message
-                response_data['data']['user_exists'] = False
-                response_data['data']['registration_needed'] = True
-                
-                # Start registration session
-                db_manager.update_registration_session(user_phone, 'language', {})
-                
-        elif text_content == 'help':
-            user_language = user.get('preferred_language', language_code) if user else language_code
-            help_message = language_manager.get_message(user_language, 'help')
-            response_data['data']['response_message'] = help_message
-            
-        elif text_content == 'language':
-            language_options = language_manager.get_language_options_text()
-            response_data['data']['response_message'] = language_options
-            response_data['data']['action'] = 'language_selection'
-            
-        elif is_language_selection(text_content):
-            language_code_selected = get_language_code(text_content)
-            language_name = language_manager.get_language_name(language_code_selected)
-            
-            if user:
-                # Update existing user's language
-                success = db_manager.update_user_language(user_phone, language_code_selected)
-                if success:
-                    confirmation_message = (language_manager.get_message(language_code_selected, 'language_changed') + 
-                                          f" ({language_name})\n\n" + 
-                                          language_manager.get_message(language_code_selected, 'welcome'))
-                    response_data['data']['response_message'] = confirmation_message
-                    response_data['data']['language_updated'] = True
-                else:
-                    confirmation_message = language_manager.get_message(
-                        user.get('preferred_language', 'en'), 'language_change_failed'
-                    )
-                    response_data['data']['response_message'] = confirmation_message
-                    response_data['status'] = 'error'
-            else:
-                # Handle registration flow
-                session = db_manager.get_registration_session(user_phone)
-                if session:
-                    temp_data = session.get('temp_data', {})
-                    temp_data['language'] = language_code_selected
-                    
-                    # Move to name step
-                    db_manager.update_registration_session(user_phone, 'name', temp_data)
-                    confirmation_message = language_manager.get_message(language_code_selected, 'ask_name')
-                    response_data['data']['response_message'] = confirmation_message
-                    response_data['data']['registration_step'] = 'name'
-                else:
-                    confirmation_message = language_manager.get_message('en', 'no_registration_session')
-                    response_data['data']['response_message'] = confirmation_message
-                    response_data['status'] = 'error'
-                    
-        elif not user:
-            # Handle registration flow for name input
-            session = db_manager.get_registration_session(user_phone)
-            
-            if session and session.get('current_step') == 'name':
-                if len(message_text.strip()) < 2:
-                    temp_data = session.get('temp_data', {})
-                    selected_language = temp_data.get('language', 'en')
-                    invalid_name_message = language_manager.get_message(selected_language, 'invalid_name')
-                    response_data['data']['response_message'] = invalid_name_message
-                    response_data['status'] = 'error'
-                else:
-                    # Complete registration
-                    temp_data = session.get('temp_data', {})
-                    temp_data['name'] = message_text.strip().title()
-                    selected_language = temp_data.get('language', 'en')
-                    
-                    # Create user
-                    success = db_manager.create_user(
-                        user_phone,
-                        temp_data['name'],
-                        selected_language
-                    )
-                    
-                    if success:
-                        completion_message = (language_manager.get_message(selected_language, 'registration_complete') + 
-                                            "\n\n" + language_manager.get_message(selected_language, 'welcome'))
-                        response_data['data']['response_message'] = completion_message
-                        response_data['data']['registration_completed'] = True
-                    else:
-                        failed_message = language_manager.get_message(selected_language, 'registration_failed')
-                        response_data['data']['response_message'] = failed_message
-                        response_data['status'] = 'error'
-            else:
-                # Start registration
-                welcome_message = (language_manager.get_message('en', 'language_selection') + 
-                                 "\n\n" + language_manager.get_language_options_text())
-                response_data['data']['response_message'] = welcome_message
-                response_data['data']['registration_needed'] = True
-                db_manager.update_registration_session(user_phone, 'language', {})
-        else:
-            # User exists but sent unrecognized text
-            user_language = user.get('preferred_language', language_code)
-            unknown_message = language_manager.get_message(user_language, 'unknown_command')
-            response_data['data']['response_message'] = unknown_message
-        
-        return jsonify(response_data), 200
-        
-    except Exception as e:
-        logger.error(f"BSP text message error: {e}")
-        return jsonify({
-            'status': 'error',
-            'message': f'Text message processing failed: {str(e)}'
-        }), 500
-
-@app.route('/bsp/user/<phone_number>', methods=['GET'])
-def bsp_get_user(phone_number):
-    """BSP endpoint to get user information"""
-    try:
-        user = db_manager.get_user_by_phone(phone_number)
-        
-        if not user:
-            return jsonify({
-                'status': 'error',
-                'message': 'User not found'
-            }), 404
-        
-        # Get user's analysis history
-        try:
-            conn = db_manager.get_connection()
-            cursor = conn.cursor(cursor_factory=RealDictCursor)
-            
-            cursor.execute("""
-                SELECT analysis_id, file_location, analysis_result, created_at
-                FROM nutrition_analysis 
-                WHERE user_id = %s 
-                ORDER BY created_at DESC 
-                LIMIT 10
-            """, (user['user_id'],))
-            
-            analyses = cursor.fetchall()
-            cursor.close()
-            conn.close()
-            
-            return jsonify({
-                'status': 'success',
-                'data': {
-                    'user': dict(user),
-                    'recent_analyses': [dict(analysis) for analysis in analyses]
-                }
-            }), 200
-            
-        except Exception as e:
-            logger.error(f"Error fetching user analyses: {e}")
-            return jsonify({
-                'status': 'success',
-                'data': {
-                    'user': dict(user),
-                    'recent_analyses': []
-                }
-            }), 200
-        
-    except Exception as e:
-        logger.error(f"BSP get user error: {e}")
-        return jsonify({
-            'status': 'error',
-            'message': f'Failed to get user: {str(e)}'
-        }), 500
-
-@app.route('/bsp/user/<phone_number>/language', methods=['PUT'])
-def bsp_update_user_language(phone_number):
-    """BSP endpoint to update user language"""
-    try:
-        # Handle different content types
-        data = {}
-        
-        if request.is_json:
-            # JSON request
-            data = request.get_json() or {}
-        elif request.form:
-            # Form data request
-            data = {
-                'language': request.form.get('language')
-            }
-        else:
-            # Try to parse as JSON anyway (fallback)
-            try:
-                data = request.get_json(force=True) or {}
-            except:
-                data = {}
-        
-        # Clean up data - remove None values and empty strings
-        data = {k: v for k, v in data.items() if v is not None and v != ''}
-        
-        # Validate phone number
-        if not phone_number or not phone_number.strip():
-            return jsonify({
-                'status': 'error',
-                'message': 'Valid phone number required'
-            }), 400
-        
-        # Validate language data
-        if not data or 'language' not in data:
-            return jsonify({
-                'status': 'error',
-                'message': 'Language code required'
-            }), 400
-        
-        language_code = data['language'].strip()
-        
-        if not language_code:
-            return jsonify({
-                'status': 'error',
-                'message': 'Language code cannot be empty'
-            }), 400
-        
-        # Validate language code
-        if language_code not in language_manager.languages:
-            return jsonify({
-                'status': 'error',
-                'message': f'Invalid language code. Supported: {list(language_manager.languages.keys())}'
-            }), 400
-        
-        # Check if user exists first
-        try:
-            user = db_manager.get_user_by_phone(phone_number)
-            if not user:
-                return jsonify({
-                    'status': 'error',
-                    'message': 'User not found'
-                }), 404
-        except Exception as e:
-            logger.error(f"Error checking user existence: {e}")
-            return jsonify({
-                'status': 'error',
-                'message': 'Failed to verify user'
-            }), 500
-        
-        # Update user language
-        try:
-            success = db_manager.update_user_language(phone_number, language_code)
-        except Exception as e:
-            logger.error(f"Database update error: {e}")
-            return jsonify({
-                'status': 'error',
-                'message': 'Failed to update language in database'
-            }), 500
-        
-        if success:
-            try:
-                language_name = language_manager.get_language_name(language_code)
-            except Exception as e:
-                logger.error(f"Error getting language name: {e}")
-                language_name = language_code  # Fallback to code
-            
-            return jsonify({
-                'status': 'success',
-                'message': f'Language updated to {language_name}',
-                'data': {
-                    'phone_number': phone_number,
-                    'language_code': language_code,
-                    'language_name': language_name,
-                    'user_id': user.get('user_id') if user else None
-                }
-            }), 200
-        else:
-            return jsonify({
-                'status': 'error',
-                'message': 'Failed to update language'
-            }), 500
-        
-    except Exception as e:
-        logger.error(f"BSP update language error: {e}")
-        return jsonify({
-            'status': 'error',
-            'message': f'Failed to update language: {str(e)}'
-        }), 500
-
-@app.route('/bsp/languages', methods=['GET'])
-def bsp_get_supported_languages():
-    """BSP endpoint to get supported languages"""
-    try:
-        return jsonify({
-            'status': 'success',
-            'data': {
-                'supported_languages': language_manager.languages,
-                'language_options_text': language_manager.get_language_options_text()
-            }
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"BSP get languages error: {e}")
-        return jsonify({
-            'status': 'error',
-            'message': f'Failed to get languages: {str(e)}'
-        }), 500
-
+    
 @app.route('/health', methods=['GET'])
 def health_check():
     """Comprehensive health check endpoint"""
