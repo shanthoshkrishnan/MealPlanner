@@ -1496,9 +1496,31 @@ def handle_registration_flow(sender: str, text: str):
 def bsp_analyze():
     """BSP endpoint for nutrition analysis using existing classes"""
     try:
-        # Parse request data
-        data = request.get_json()
+        # Initialize variables
+        data = {}
         files = request.files
+        
+        # Try to get data from different sources
+        if request.is_json:
+            # JSON request
+            data = request.get_json() or {}
+        elif request.form:
+            # Form data request
+            data = {
+                'phone_number': request.form.get('phone_number'),
+                'user_id': request.form.get('user_id'),
+                'message': request.form.get('message', ''),
+                'language': request.form.get('language', 'en')
+            }
+        else:
+            # Try to parse as JSON anyway (fallback)
+            try:
+                data = request.get_json(force=True) or {}
+            except:
+                data = {}
+        
+        # Clean up data - remove None values and empty strings
+        data = {k: v for k, v in data.items() if v is not None and v != ''}
         
         if not data and not files:
             return jsonify({
@@ -1507,10 +1529,10 @@ def bsp_analyze():
             }), 400
         
         # Get user identifier (phone number or user_id)
-        user_phone = data.get('phone_number') if data else None
-        user_id = data.get('user_id') if data else None
-        message_text = data.get('message', '').strip() if data else ''
-        language_code = data.get('language', 'en') if data else 'en'
+        user_phone = data.get('phone_number')
+        user_id = data.get('user_id')
+        message_text = data.get('message', '').strip()
+        language_code = data.get('language', 'en')
         
         # Handle file upload (image analysis)
         if 'image' in files:
@@ -1536,7 +1558,7 @@ def handle_bsp_image_analysis(image_file, user_phone=None, user_id=None, languag
     """Handle BSP image analysis using existing classes"""
     try:
         # Validate image file
-        if not image_file or not image_file.filename:
+        if not image_file or not hasattr(image_file, 'filename') or not image_file.filename:
             return jsonify({
                 'status': 'error',
                 'message': 'No valid image file provided'
@@ -1552,32 +1574,42 @@ def handle_bsp_image_analysis(image_file, user_phone=None, user_id=None, languag
                 'message': f'Unsupported file type. Allowed: {", ".join(allowed_extensions)}'
             }), 400
         
+        # Validate user identifier
+        if not user_phone and not user_id:
+            return jsonify({
+                'status': 'error',
+                'message': 'Either phone_number or user_id must be provided'
+            }), 400
+        
         # Get or create user
         user = None
         if user_phone:
             user = db_manager.get_user_by_phone(user_phone)
             if not user:
                 # Create user with basic info for BSP
-                success = db_manager.create_user(
-                    user_phone,
-                    f"BSP_User_{user_phone[-4:]}",  # Generic name
-                    language_code
-                )
-                if success:
-                    user = db_manager.get_user_by_phone(user_phone)
-                else:
+                try:
+                    success = db_manager.create_user(
+                        user_phone,
+                        f"BSP_User_{user_phone[-4:]}",  # Generic name
+                        language_code
+                    )
+                    if success:
+                        user = db_manager.get_user_by_phone(user_phone)
+                    else:
+                        return jsonify({
+                            'status': 'error',
+                            'message': 'Failed to create user'
+                        }), 500
+                except Exception as e:
+                    logger.error(f"User creation error: {e}")
                     return jsonify({
                         'status': 'error',
                         'message': 'Failed to create user'
                     }), 500
         elif user_id:
-            # For direct user_id usage
+            # For direct user_id usage - validate it exists if possible
+            # If you have a method to validate user_id, use it here
             user = {'user_id': user_id, 'preferred_language': language_code}
-        else:
-            return jsonify({
-                'status': 'error',
-                'message': 'Either phone_number or user_id must be provided'
-            }), 400
         
         if not user or 'user_id' not in user:
             return jsonify({
@@ -1587,7 +1619,7 @@ def handle_bsp_image_analysis(image_file, user_phone=None, user_id=None, languag
         
         user_language = user.get('preferred_language', language_code)
         
-        # Read image bytes
+        # Read image bytes with size validation
         image_file.seek(0)  # Reset file pointer
         image_bytes = image_file.read()
         
@@ -1595,6 +1627,35 @@ def handle_bsp_image_analysis(image_file, user_phone=None, user_id=None, languag
             return jsonify({
                 'status': 'error',
                 'message': 'Empty image file'
+            }), 400
+        
+        # Check file size (optional - add reasonable limit)
+        max_file_size = 10 * 1024 * 1024  # 10MB
+        if len(image_bytes) > max_file_size:
+            return jsonify({
+                'status': 'error',
+                'message': f'File too large. Maximum size: {max_file_size // (1024*1024)}MB'
+            }), 400
+        
+        # Convert bytes to PIL Image for validation BEFORE uploading
+        try:
+            image = Image.open(io.BytesIO(image_bytes))
+            # Validate image dimensions
+            if image.width < 50 or image.height < 50:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Image too small. Minimum size: 50x50 pixels'
+                }), 400
+            
+            # Convert to RGB if necessary (for analysis consistency)
+            if image.mode != 'RGB':
+                image = image.convert('RGB')
+                
+        except Exception as e:
+            logger.error(f"PIL Image validation error: {e}")
+            return jsonify({
+                'status': 'error',
+                'message': 'Invalid image format or corrupted image'
             }), 400
         
         # Upload to S3 using existing S3Manager
@@ -1613,27 +1674,27 @@ def handle_bsp_image_analysis(image_file, user_phone=None, user_id=None, languag
                 'message': 'Image upload failed'
             }), 500
         
-        # Convert bytes to PIL Image for analysis
-        try:
-            image = Image.open(io.BytesIO(image_bytes))
-        except Exception as e:
-            logger.error(f"PIL Image conversion error: {e}")
-            return jsonify({
-                'status': 'error',
-                'message': 'Invalid image format'
-            }), 400
-        
         # Analyze image using existing NutritionAnalyzer
         try:
             user_message, nutrition_json = analyzer.analyze_image(image, user_language)
+            
+            # Validate analysis results
+            if not user_message and not nutrition_json:
+                logger.warning(f"Empty analysis result for user {user['user_id']}")
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Could not analyze the image. Please try with a clearer image of food.'
+                }), 400
+                
         except Exception as e:
             logger.error(f"Nutrition analysis error: {e}")
             return jsonify({
                 'status': 'error',
-                'message': 'Failed to analyze image'
+                'message': 'Failed to analyze image. Please try again with a clearer image.'
             }), 500
         
         # Save analysis using existing DatabaseManager
+        analysis_saved = False
         try:
             success = db_manager.save_nutrition_analysis(
                 user['user_id'], 
@@ -1642,10 +1703,13 @@ def handle_bsp_image_analysis(image_file, user_phone=None, user_id=None, languag
                 nutrition_json
             )
             
-            if not success:
+            if success:
+                analysis_saved = True
+            else:
                 logger.warning(f"Failed to save nutrition analysis for user {user['user_id']}")
         except Exception as e:
             logger.error(f"Database save error: {e}")
+            # Don't fail the request if saving fails, but log it
         
         # Prepare response
         response_data = {
@@ -1655,14 +1719,19 @@ def handle_bsp_image_analysis(image_file, user_phone=None, user_id=None, languag
                 'user_message': user_message,
                 'nutrition_analysis': nutrition_json,
                 'image_url': image_url,
-                'language': user_language
+                'language': user_language,
+                'analysis_saved': analysis_saved
             }
         }
         
         # Add health warning if needed
-        if nutrition_json and nutrition_json.get('health_analysis', {}).get('health_score', 10) < 4:
-            health_warning = get_health_warning_message(user_language)
-            response_data['data']['health_warning'] = health_warning
+        try:
+            if nutrition_json and nutrition_json.get('health_analysis', {}).get('health_score', 10) < 4:
+                health_warning = get_health_warning_message(user_language)
+                response_data['data']['health_warning'] = health_warning
+        except Exception as e:
+            logger.error(f"Health warning generation error: {e}")
+            # Don't fail the request if health warning fails
         
         return jsonify(response_data), 200
         
