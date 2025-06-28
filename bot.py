@@ -94,11 +94,9 @@ class DatabaseManager:
     def init_database(self):
         """Initialize database tables with simplified schema (no address)"""
         try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            
-            # Create users table with auto-incrementing user_id (no address)
-            cursor.execute("""
+            # Step 1: Create users table
+            self._execute_sql_safely([
+                """
                 CREATE TABLE IF NOT EXISTS users (
                     user_id SERIAL PRIMARY KEY,
                     phone_number VARCHAR(20) UNIQUE NOT NULL,
@@ -108,9 +106,12 @@ class DatabaseManager:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
-            """)
-            # Create language_messages table
-            cursor.execute("""
+                """
+            ])
+        
+            # Step 2: Create language_messages table
+            self._execute_sql_safely([
+                """
                 CREATE TABLE IF NOT EXISTS language_messages (
                     id SERIAL PRIMARY KEY,
                     language_code VARCHAR(10) NOT NULL,
@@ -120,24 +121,17 @@ class DatabaseManager:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(language_code, message_key)
                 );
-            """)
-            try:
-                cursor.execute("""
-                    ALTER TABLE nutrition_analysis DROP COLUMN IF EXISTS phone_number;
-              """)
-            except Exception:
-                pass  # Column might not exist
-
-            try:
-                cursor.execute("ALTER TABLE users DROP COLUMN IF EXISTS address;")
-                cursor.execute("ALTER TABLE users DROP COLUMN IF EXISTS email;")
-            except Exception:
-                pass
-            
-            # Create nutrition_analysis table 
-            cursor.execute("DROP TABLE IF EXISTS nutrition_analysis;")
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS nutrition_analysis (
+                """
+           ])
+        
+            # Step 3: Drop problematic columns safely
+            self._drop_columns_safely()
+        
+            # Step 4: Recreate nutrition_analysis table
+            self._execute_sql_safely([
+                "DROP TABLE IF EXISTS nutrition_analysis CASCADE;",
+                """
+                CREATE TABLE nutrition_analysis (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
                     file_location TEXT NOT NULL,
@@ -145,10 +139,12 @@ class DatabaseManager:
                     nutrient_details JSONB,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
-            """)
-            
-            # Create user_registration_sessions table 
-            cursor.execute("""
+                """
+            ])
+        
+            # Step 5: Create user_registration_sessions table
+            self._execute_sql_safely([
+                """
                 CREATE TABLE IF NOT EXISTS user_registration_sessions (
                     id SERIAL PRIMARY KEY,
                     phone_number VARCHAR(20) UNIQUE NOT NULL,
@@ -157,25 +153,49 @@ class DatabaseManager:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
-            """)
-            
-            # Create indexes for better performance
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone_number);")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_nutrition_user_id ON nutrition_analysis(user_id);")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_phone ON user_registration_sessions(phone_number);")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_lang_key ON language_messages(language_code, message_key);")
+                """
+           ])
+        
+            # Step 6: Create indexes
+            self._execute_sql_safely([
+                "CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone_number);",
+                "CREATE INDEX IF NOT EXISTS idx_nutrition_user_id ON nutrition_analysis(user_id);",
+                "CREATE INDEX IF NOT EXISTS idx_sessions_phone ON user_registration_sessions(phone_number);",
+                "CREATE INDEX IF NOT EXISTS idx_messages_lang_key ON language_messages(language_code, message_key);"
+           ])
 
-            conn.commit()
-            cursor.close()
-            conn.close()
             logger.info("Database initialized successfully")
-            
+        
         except Exception as e:
             logger.error(f"Database initialization error: {e}")
             raise
     
-    def _safe_drop_columns(self, conn, cursor):
-        """Safely drop columns with proper transaction handling"""
+    def _execute_sql_safely(self, sql_statements):
+        """Execute SQL statements in a safe transaction"""
+        conn = None
+        cursor = None
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+        
+            for sql in sql_statements:
+                cursor.execute(sql)
+        
+            conn.commit()
+        
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logger.error(f"Error executing SQL: {e}")
+            raise
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
+
+    def _drop_columns_safely(self):
+        """Safely drop columns that might not exist"""
         columns_to_drop = [
             ("nutrition_analysis", "phone_number"),
             ("users", "address"),
@@ -183,14 +203,33 @@ class DatabaseManager:
         ]
     
         for table_name, column_name in columns_to_drop:
+            conn = None
+            cursor = None
             try:
-                cursor.execute(f"ALTER TABLE {table_name} DROP COLUMN IF EXISTS {column_name};")
-                conn.commit()
+                conn = self.get_connection()
+                cursor = conn.cursor()
+            
+                # Check if column exists first
+                cursor.execute("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = %s AND column_name = %s
+                """, (table_name, column_name))
+            
+                if cursor.fetchone():
+                    cursor.execute(f"ALTER TABLE {table_name} DROP COLUMN {column_name};")
+                    conn.commit()
+                    logger.info(f"Dropped column {column_name} from {table_name}")
+            
             except Exception as e:
                 logger.warning(f"Could not drop {column_name} from {table_name}: {e}")
-                conn.rollback()
-                # Continue with a fresh transaction
-                cursor = conn.cursor()
+                if conn:
+                    conn.rollback()
+            finally:
+                if cursor:
+                    cursor.close()
+                if conn:
+                    conn.close()
 
     def get_language_message(self, language_code: str, message_key: str) -> Optional[str]:
         """Get language message from database"""
@@ -495,95 +534,54 @@ class DatabaseManager:
 
     def migrate_database_schema(self):
         """Migrate database schema to fix user_id issues"""
+        conn = None
+        cursor = None
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
-        
-            # Check if users table exists and has correct structure
+    
+            # Check if users table exists
             cursor.execute("""
-                SELECT column_name, data_type, is_nullable
-                FROM information_schema.columns 
-                WHERE table_name = 'users'
-                ORDER BY ordinal_position;
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_name = 'users'
+                );
             """)
         
-            existing_columns = cursor.fetchall()
+            table_exists = cursor.fetchone()[0]
         
-            # If users table doesn't have user_id as primary key, recreate it
-            has_user_id_pk = False
-            for col in existing_columns:
-                if col[0] == 'user_id':
-                    # Check if it's primary key
-                    cursor.execute("""
-                        SELECT tc.constraint_name
-                        FROM information_schema.table_constraints tc
-                        JOIN information_schema.key_column_usage kcu
-                        ON tc.constraint_name = kcu.constraint_name
-                        WHERE tc.table_name = 'users' 
-                        AND tc.constraint_type = 'PRIMARY KEY'
-                        AND kcu.column_name = 'user_id';
-                    """)
-                    if cursor.fetchone():
-                        has_user_id_pk = True
-                    break
-        
-            if not has_user_id_pk:
-                logger.info("Recreating users table with proper schema...")
-            
-                # Backup existing data
-                cursor.execute("SELECT * FROM users;")
-                existing_users = cursor.fetchall()
-            
-                # Drop and recreate users table
-                cursor.execute("DROP TABLE IF EXISTS nutrition_analysis;")
-                cursor.execute("DROP TABLE IF EXISTS users;")
-            
-                # Create new users table with proper schema
-                cursor.execute("""
-                    CREATE TABLE users (
-                    user_id SERIAL PRIMARY KEY,
-                    phone_number VARCHAR(20) UNIQUE NOT NULL,
-                    name VARCHAR(100),
-                    preferred_language VARCHAR(10) DEFAULT 'en',
-                    registration_status VARCHAR(20) DEFAULT 'pending',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
-                """)
-            
-                # Restore data (excluding address and email if they existed)
-                for user in existing_users:
-                    cursor.execute("""
-                        INSERT INTO users (phone_number, name, preferred_language, registration_status, created_at, updated_at)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                    """, (user[1], user[2], user[3], user[4], user[5], user[6]))  # Adjust indices based on your schema
-            
-                # Recreate nutrition_analysis table
-                cursor.execute("""
-                    CREATE TABLE nutrition_analysis (
-                    id SERIAL PRIMARY KEY,
-                    user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-                    file_location TEXT NOT NULL,
-                    analysis_result TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
-                """)
-            
-                logger.info("Database schema migration completed")
-        
-            # Remove address column if it exists
-            try:
-                cursor.execute("ALTER TABLE users DROP COLUMN IF EXISTS address;")
-                cursor.execute("ALTER TABLE users DROP COLUMN IF EXISTS email;")
-            except Exception:
-                pass
-        
-            conn.commit()
-            cursor.close()
-            conn.close()
-        
-        except Exception as e:
-            logger.error(f"Database migration error: {e}")
+            if not table_exists:
+                logger.info("Users table doesn't exist, will be created in init_database")
+                return
     
-      
+            # Check if users table has user_id as primary key
+            cursor.execute("""
+                SELECT tc.constraint_name
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu
+                ON tc.constraint_name = kcu.constraint_name
+                WHERE tc.table_name = 'users' 
+                AND tc.constraint_type = 'PRIMARY KEY'
+                AND kcu.column_name = 'user_id';
+            """)
+            has_user_id_pk = cursor.fetchone() is not None
+    
+            if not has_user_id_pk:
+                logger.info("Users table exists but needs migration - will be handled in init_database")
+    
+            conn.commit()
+    
+        except Exception as e:
+            logger.warning(f"Database migration check error: {e}")
+            # Don't raise here, let init_database handle the creation
+            if conn:
+                conn.rollback()
+        finally:
+            if cursor:
+                cursor.close()
+            if conn:
+                conn.close()
+     
     def get_user_nutrition_history(self, user_id: int, limit: int = 10) -> List[Dict]:
         """Get user's nutrition analysis history with nutrient details"""
         try:
