@@ -768,52 +768,34 @@ class DatabaseManager:
             logger.debug(f"Final values - health_score: {default_values['health_score']}")
 
             # Execute the insert query
-            cursor.execute("""
-                INSERT INTO nutrition_analysis (
-                    user_id, file_location, analysis_result, language,
-                    dish_name, cuisine_type, confidence_level, dish_description,
-                    estimated_weight_grams, serving_description,
-                    calories, protein_g, carbohydrates_g, fat_g, fiber_g, sugar_g, 
-                    sodium_mg, saturated_fat_g, key_vitamins, key_minerals,
-                    health_score, health_grade, nutritional_strengths, areas_of_concern, overall_assessment,
-                    potential_allergens, is_vegetarian, is_vegan, is_gluten_free, is_dairy_free, 
-                    is_keto_friendly, is_low_sodium,
-                    healthier_alternatives, portion_recommendations, cooking_modifications, nutritional_additions,
-                    ingredients_identified, cooking_method, meal_category
-                )
-                VALUES (
-                    %s, %s, %s, %s,
-                    %s, %s, %s, %s,
-                    %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s,
-                    %s, %s, %s
-                )
-            """, (
-                default_values['user_id'], default_values['file_location'], 
-                default_values['analysis_result'], default_values['language'],
-                default_values['dish_name'], default_values['cuisine_type'], 
-                default_values['confidence_level'], default_values['dish_description'],
-                default_values['estimated_weight_grams'], default_values['serving_description'],
-                default_values['calories'], default_values['protein_g'], 
-                default_values['carbohydrates_g'], default_values['fat_g'], 
-                default_values['fiber_g'], default_values['sugar_g'], 
-                default_values['sodium_mg'], default_values['saturated_fat_g'], 
-                default_values['key_vitamins'], default_values['key_minerals'],
-                default_values['health_score'], default_values['health_grade'], 
-                default_values['nutritional_strengths'], default_values['areas_of_concern'], 
-                default_values['overall_assessment'],
-                default_values['potential_allergens'], default_values['is_vegetarian'], 
-                default_values['is_vegan'], default_values['is_gluten_free'], 
-                default_values['is_dairy_free'], default_values['is_keto_friendly'], 
-                default_values['is_low_sodium'],
-                default_values['healthier_alternatives'], default_values['portion_recommendations'], 
-                default_values['cooking_modifications'], default_values['nutritional_additions'],
-                default_values['ingredients_identified'], default_values['cooking_method'], 
-                default_values['meal_category']
-            ))
+            sql = """
+            INSERT INTO nutrition_analysis (
+                user_id, file_location, analysis_result, language,
+                dish_name, cuisine_type, confidence_level, dish_description,
+                estimated_weight_grams, serving_description,
+                calories, protein_g, carbohydrates_g, fat_g, fiber_g, sugar_g,
+                sodium_mg, saturated_fat_g, key_vitamins, key_minerals,
+                health_score, health_grade, nutritional_strengths, areas_of_concern, overall_assessment,
+                potential_allergens, is_vegetarian, is_vegan, is_gluten_free, is_dairy_free,
+                is_keto_friendly, is_low_sodium,
+                healthier_alternatives, portion_recommendations, cooking_modifications, nutritional_additions,
+                ingredients_identified, cooking_method, meal_category
+            )
+            VALUES (
+                %(user_id)s, %(file_location)s, %(analysis_result)s, %(language)s,
+                %(dish_name)s, %(cuisine_type)s, %(confidence_level)s, %(dish_description)s,
+                %(estimated_weight_grams)s, %(serving_description)s,
+                %(calories)s, %(protein_g)s, %(carbohydrates_g)s, %(fat_g)s, %(fiber_g)s, %(sugar_g)s,
+                %(sodium_mg)s, %(saturated_fat_g)s, %(key_vitamins)s, %(key_minerals)s,
+                %(health_score)s, %(health_grade)s, %(nutritional_strengths)s, %(areas_of_concern)s, %(overall_assessment)s,
+                %(potential_allergens)s, %(is_vegetarian)s, %(is_vegan)s, %(is_gluten_free)s, %(is_dairy_free)s,
+                %(is_keto_friendly)s, %(is_low_sodium)s,
+                %(healthier_alternatives)s, %(portion_recommendations)s, %(cooking_modifications)s, %(nutritional_additions)s,
+                %(ingredients_identified)s, %(cooking_method)s, %(meal_category)s
+            )
+            """
+
+            cursor.execute(sql, default_values)
 
             conn.commit()
             cursor.close()
