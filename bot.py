@@ -683,12 +683,18 @@ class DatabaseManager:
                 'cooking_method': None,
                 'meal_category': None
             }
+ 
+            print("🔍 Raw nutrition_data:", json.dumps(nutrition_data, indent=2, ensure_ascii=False) if nutrition_data else "None")
 
             # Extract data from nutrient_details if provided
             if nutrition_data and isinstance(nutrition_data, dict) and nutrition_data.get('is_food', True):
                 try:
                     logger.debug("Extracting data from already parsed nutrition_data...")
-                
+                    
+                    language = nutrition_data.get('language', language)
+                    default_values["language"] = safe_truncate(language, 10, 'language')
+                    print(f"🗣️ Language set to: {default_values['language']}")
+
                     # Dish identification
                     dish_info = nutrition_data.get('dish_identification', {})
                     if dish_info:
@@ -696,12 +702,17 @@ class DatabaseManager:
                         default_values['cuisine_type'] = safe_truncate(dish_info.get('cuisine_type'), 20000, 'cuisine_type')
                         default_values['confidence_level'] = safe_truncate(dish_info.get('confidence_level'), 200, 'confidence_level')
                         default_values['dish_description'] = dish_info.get('description')
+                        print(f"🍽️ Dish Name: {default_values['dish_name']}")
+                        print(f"🌍 Cuisine: {default_values['cuisine_type']}")
+                        print(f"✅ Confidence Level: {default_values['confidence_level']}")
 
                     # Serving information
                     serving_info = nutrition_data.get('serving_info', {})
                     if serving_info:
                         default_values['estimated_weight_grams'] = safe_numeric(serving_info.get('estimated_weight_grams'))
                         default_values['serving_description'] = safe_truncate(serving_info.get('serving_description'), 20000, 'serving_description')
+                        print(f"📏 Weight (g): {default_values['estimated_weight_grams']}")
+                        print(f"📦 Serving Description: {default_values['serving_description']}")
 
                     # Nutrition facts
                     nutrition_facts = nutrition_data.get('nutrition_facts', {})
@@ -716,7 +727,16 @@ class DatabaseManager:
                         default_values['saturated_fat_g'] = safe_numeric(nutrition_facts.get('saturated_fat_g'))
                         default_values['key_vitamins'] = safe_array(nutrition_facts.get('key_vitamins'))
                         default_values['key_minerals'] = safe_array(nutrition_facts.get('key_minerals'))
-
+                        print(f"🔥 Calories: {default_values['calories']}")
+                        print(f"💪 Protein (g): {default_values['protein_g']}")
+                        print(f"🍞 Carbs (g): {default_values['carbohydrates_g']}")
+                        print(f"🥑 Fat (g): {default_values['fat_g']}")
+                        print(f"🌾 Fiber (g): {default_values['fiber_g']}")
+                        print(f"🍬 Sugar (g): {default_values['sugar_g']}")
+                        print(f"🧂 Sodium (mg): {default_values['sodium_mg']}")
+                        print(f"🧈 Sat. Fat (g): {default_values['saturated_fat_g']}")
+                        print(f"🔑 Vitamins: {default_values['key_vitamins']}")
+                        print(f"🔩 Minerals: {default_values['key_minerals']}")
                     # Health analysis
                     health_analysis = nutrition_data.get('health_analysis', {})
                     if health_analysis:
@@ -725,6 +745,11 @@ class DatabaseManager:
                         default_values['nutritional_strengths'] = safe_array(health_analysis.get('nutritional_strengths'))
                         default_values['areas_of_concern'] = safe_array(health_analysis.get('areas_of_concern'))
                         default_values['overall_assessment'] = health_analysis.get('overall_assessment')
+                        print(f"❤️ Health Score: {default_values['health_score']}")
+                        print(f"🎓 Health Grade: {default_values['health_grade']}")
+                        print(f"💚 Strengths: {default_values['nutritional_strengths']}")
+                        print(f"⚠️ Concerns: {default_values['areas_of_concern']}")
+                        print(f"🧾 Assessment: {default_values['overall_assessment']}")
 
                     # Dietary information
                     dietary_info = nutrition_data.get('dietary_information', {})
@@ -740,7 +765,13 @@ class DatabaseManager:
                             default_values['is_dairy_free'] = safe_boolean(dietary_compatibility.get('dairy_free'))
                             default_values['is_keto_friendly'] = safe_boolean(dietary_compatibility.get('keto_friendly'))
                             default_values['is_low_sodium'] = safe_boolean(dietary_compatibility.get('low_sodium'))
-
+                            print(f"🚨 Allergens: {default_values['potential_allergens']}")
+                            print(f"🥬 Is Vegetarian? {default_values['is_vegetarian']}")
+                            print(f"🌱 Is Vegan? {default_values['is_vegan']}")
+                            print(f"🌾 Gluten-Free? {default_values['is_gluten_free']}")
+                            print(f"🥛 Dairy-Free? {default_values['is_dairy_free']}")
+                            print(f"🥩 Keto-Friendly? {default_values['is_keto_friendly']}")
+                            print(f"🧂 Low Sodium? {default_values['is_low_sodium']}")
                     # Improvement suggestions
                     improvements = nutrition_data.get('improvement_suggestions', {})
                     if improvements:
@@ -748,6 +779,10 @@ class DatabaseManager:
                         default_values['portion_recommendations'] = improvements.get('portion_recommendations')
                         default_values['cooking_modifications'] = safe_array(improvements.get('cooking_modifications'))
                         default_values['nutritional_additions'] = safe_array(improvements.get('nutritional_additions'))
+                        print(f"🆗 Healthier Options: {default_values['healthier_alternatives']}")
+                        print(f"📏 Portion Advice: {default_values['portion_recommendations']}")
+                        print(f"👨‍🍳 Cooking Tips: {default_values['cooking_modifications']}")
+                        print(f"🧪 Nutritional Additions: {default_values['nutritional_additions']}")
 
                     # Detailed breakdown
                     detailed_breakdown = nutrition_data.get('detailed_breakdown', {})
@@ -755,6 +790,9 @@ class DatabaseManager:
                         default_values['ingredients_identified'] = safe_array(detailed_breakdown.get('ingredients_identified'))
                         default_values['cooking_method'] = safe_truncate(detailed_breakdown.get('cooking_method'), 2000, 'cooking_method')
                         default_values['meal_category'] = safe_truncate(detailed_breakdown.get('meal_category'), 2000, 'meal_category')
+                        print(f"🧂 Ingredients Identified: {default_values['ingredients_identified']}")
+                        print(f"🔥 Cooking Method: {default_values['cooking_method']}")
+                        print(f"🍽️ Meal Category: {default_values['meal_category']}")
 
                     logger.debug("Data extraction from parsed JSON completed successfully")
 
@@ -794,8 +832,12 @@ class DatabaseManager:
                 %(ingredients_identified)s, %(cooking_method)s, %(meal_category)s
             )
             """
+            print("✅ Final values ready for insert:")
+            for k, v in default_values.items():
+                print(f"  - {k}: {v}")
 
             cursor.execute(sql, default_values)
+
 
             conn.commit()
             cursor.close()
