@@ -522,11 +522,22 @@ class DatabaseManager:
             return False
     
     def save_nutrition_analysis(self, user_id: int, file_location: str, analysis_result: str, language: str = 'en', nutrient_details: dict = None) -> bool:
-        """Save nutrition analysis to database with separate nutrient columns"""
+        """Save nutrition analysis to database with separate nutrient columns - DEBUG VERSION"""
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
-
+    
+            # Helper function to safely truncate strings and log issues
+            def safe_truncate(value, max_length, field_name="unknown"):
+                if value is None:
+                    return None
+                str_value = str(value)
+                if len(str_value) > max_length:
+                    logger.warning(f"Truncating {field_name}: {len(str_value)} chars to {max_length}")
+                    logger.debug(f"Original value: {str_value[:100]}...")
+                    return str_value[:max_length]
+                return str_value
+    
             # Extract data from nutrient_details if provided
             if nutrient_details:
                 dish_info = nutrient_details.get('dish_identification', {})
@@ -537,7 +548,53 @@ class DatabaseManager:
                 dietary_compatibility = dietary_info.get('dietary_compatibility', {})
                 improvements = nutrient_details.get('improvement_suggestions', {})
                 detailed_breakdown = nutrient_details.get('detailed_breakdown', {})
-
+            
+                # Prepare and log all values
+                values = {
+                    'user_id': user_id,
+                    'file_location': safe_truncate(file_location, 500, 'file_location'),
+                    'analysis_result': analysis_result,  # TEXT field
+                    'language': safe_truncate(language, 10, 'language'),
+                    'dish_name': safe_truncate(dish_info.get('name'), 20000, 'dish_name'),
+                    'cuisine_type': safe_truncate(dish_info.get('cuisine_type'), 20000, 'cuisine_type'),
+                    'confidence_level': safe_truncate(dish_info.get('confidence_level'), 200, 'confidence_level'),
+                    'dish_description': dish_info.get('description'),  # TEXT
+                    'estimated_weight_grams': serving_info.get('estimated_weight_grams'),
+                    'serving_description': safe_truncate(serving_info.get('serving_description'), 20000, 'serving_description'),
+                    'calories': nutrition_facts.get('calories'),
+                    'protein_g': nutrition_facts.get('protein_g'),
+                    'carbohydrates_g': nutrition_facts.get('carbohydrates_g'),
+                    'fat_g': nutrition_facts.get('fat_g'),
+                    'fiber_g': nutrition_facts.get('fiber_g'),
+                    'sugar_g': nutrition_facts.get('sugar_g'),
+                    'sodium_mg': nutrition_facts.get('sodium_mg'),
+                    'saturated_fat_g': nutrition_facts.get('saturated_fat_g'),
+                    'key_vitamins': nutrition_facts.get('key_vitamins', []),
+                    'key_minerals': nutrition_facts.get('key_minerals', []),
+                    'health_score': health_analysis.get('health_score'),
+                    'health_grade': safe_truncate(health_analysis.get('health_grade'), 5, 'health_grade'),
+                    'nutritional_strengths': health_analysis.get('nutritional_strengths', []),
+                    'areas_of_concern': health_analysis.get('areas_of_concern', []),
+                    'overall_assessment': health_analysis.get('overall_assessment'),  # TEXT
+                    'potential_allergens': dietary_info.get('potential_allergens', []),
+                    'is_vegetarian': dietary_compatibility.get('vegetarian'),
+                    'is_vegan': dietary_compatibility.get('vegan'),
+                    'is_gluten_free': dietary_compatibility.get('gluten_free'),
+                    'is_dairy_free': dietary_compatibility.get('dairy_free'),
+                    'is_keto_friendly': dietary_compatibility.get('keto_friendly'),
+                    'is_low_sodium': dietary_compatibility.get('low_sodium'),
+                    'healthier_alternatives': improvements.get('healthier_alternatives', []),
+                    'portion_recommendations': improvements.get('portion_recommendations'),  # TEXT
+                    'cooking_modifications': improvements.get('cooking_modifications', []),
+                    'nutritional_additions': improvements.get('nutritional_additions', []),
+                    'ingredients_identified': detailed_breakdown.get('ingredients_identified', []),
+                    'cooking_method': safe_truncate(detailed_breakdown.get('cooking_method'), 2000, 'cooking_method'),
+                    'meal_category': safe_truncate(detailed_breakdown.get('meal_category'), 2000, 'meal_category')
+                }
+            
+                # Log the values for debugging
+                logger.debug(f"Inserting nutrition analysis with values: {values}")
+        
                 cursor.execute("""
                     INSERT INTO nutrition_analysis (
                         user_id, file_location, analysis_result, language,
@@ -561,76 +618,23 @@ class DatabaseManager:
                         %s, %s, %s, %s,
                         %s, %s, %s
                     )
-                """, (
-                    # Basic info - FIXED ORDER
-                    user_id,
-                    file_location,
-                    analysis_result,
-                    language,  # This should be 4th parameter
-
-                    # Dish identification
-                    dish_info.get('name'),
-                    dish_info.get('cuisine_type'),
-                    dish_info.get('confidence_level'),
-                    dish_info.get('description'),
-
-                    # Serving info
-                    serving_info.get('estimated_weight_grams'),
-                    serving_info.get('serving_description'),
-
-                    # Nutrition facts
-                    nutrition_facts.get('calories'),
-                    nutrition_facts.get('protein_g'),
-                    nutrition_facts.get('carbohydrates_g'),
-                    nutrition_facts.get('fat_g'),
-                    nutrition_facts.get('fiber_g'),
-                    nutrition_facts.get('sugar_g'),
-                    nutrition_facts.get('sodium_mg'),
-                    nutrition_facts.get('saturated_fat_g'),
-                    nutrition_facts.get('key_vitamins', []),
-                    nutrition_facts.get('key_minerals', []),
-
-                    # Health analysis
-                    health_analysis.get('health_score'),
-                    health_analysis.get('health_grade'),
-                    health_analysis.get('nutritional_strengths', []),
-                    health_analysis.get('areas_of_concern', []),
-                    health_analysis.get('overall_assessment'),
-
-                    # Dietary information
-                    dietary_info.get('potential_allergens', []),
-                    dietary_compatibility.get('vegetarian'),
-                    dietary_compatibility.get('vegan'),
-                    dietary_compatibility.get('gluten_free'),
-                    dietary_compatibility.get('dairy_free'),
-                    dietary_compatibility.get('keto_friendly'),
-                    dietary_compatibility.get('low_sodium'),
-
-                    # Improvements
-                    improvements.get('healthier_alternatives', []),
-                    improvements.get('portion_recommendations'),
-                    improvements.get('cooking_modifications', []),
-                    improvements.get('nutritional_additions', []),
-
-                    # Additional details
-                    detailed_breakdown.get('ingredients_identified', []),
-                    detailed_breakdown.get('cooking_method'),
-                    detailed_breakdown.get('meal_category')
-                ))
+                """, tuple(values.values()))
             else:
                 # Fallback for cases without nutrient_details
                 cursor.execute("""
                     INSERT INTO nutrition_analysis (user_id, file_location, analysis_result, language)
                     VALUES (%s, %s, %s, %s)
-                """, (user_id, file_location, analysis_result, language))
-
+                """, (user_id, safe_truncate(file_location, 500, 'file_location'), analysis_result, safe_truncate(language, 10, 'language')))
+    
             conn.commit()
             cursor.close()
             conn.close()
+            logger.info(f"Successfully saved nutrition analysis for user {user_id}")
             return True
-
+    
         except Exception as e:
             logger.error(f"Error saving nutrition analysis: {e}")
+            logger.error(f"Error details - user_id: {user_id}, language: {language}")
             if conn:
                 conn.rollback()
             return False
