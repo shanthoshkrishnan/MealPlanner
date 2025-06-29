@@ -88,16 +88,11 @@ except Exception as e:
     raise
 
 def safe_json_serialize(obj):
-    """Safely serialize objects to JSON, handling datetime objects"""
-    def json_serial(obj):
-        if isinstance(obj, datetime):
-            return obj.isoformat()
-        raise TypeError(f"Type {type(obj)} not serializable")
-    
+    """Safely serialize objects for logging"""
     try:
-        return json.dumps(obj, default=json_serial, indent=2)
-    except Exception as e:
-        return str(obj)
+        return json.dumps(obj, default=str)
+    except (TypeError, ValueError) as e:
+        return f"<Non-serializable object: {type(obj).__name__}>"
     
 class DatabaseManager:
     def __init__(self):
@@ -1101,7 +1096,9 @@ class LanguageManager:
         return "🌍 Please select your preferred language:\n\n" + "\n".join(options) + "\n\n💬 Reply with the full language name (e.g., English, Tamil, Hindi)"
 
 class NutritionAnalyzer:
-    def __init__(self):
+    def __init__(self, language_manager):
+        self.language_manager = language_manager
+        
         try:
             self.model = genai.GenerativeModel('gemini-1.5-flash')
             logger.info("Nutrition analyzer initialized successfully")
@@ -1232,33 +1229,47 @@ class NutritionAnalyzer:
             return self._get_error_message(language), {}
     
     def _create_non_food_message(self, response_data: dict, language: str) -> str:
-        """Create message for non-food images using existing get_message method"""
+        """Create message for non-food images"""
         try:
             image_description = response_data.get('image_description', '')
             ai_message = response_data.get('message', '')
         
-            # Get message template from database using your existing method
-            message_template = self.get_message(language, 'non_food_image')
-        
-            # Replace placeholders if template supports them
-            if '{image_description}' in message_template and '{message}' in message_template:
-                formatted_message = message_template.format(
-                    image_description=image_description,
-                    message=ai_message
-                )
-                return formatted_message
-            else:
-                # If no placeholders, return template as is
-                return message_template
+            # Use the hardcoded messages instead of language_manager
+            non_food_messages = {
+                'en': f"🚫 This appears to be: {image_description}\n\n{ai_message}\n\nPlease send a clear photo of food for nutrition analysis! 📸🍽️",
+                'ta': f"🚫 இது தோன்றுகிறது: {image_description}\n\n{ai_message}\n\nஊட்டச்சத்து பகுப்பாய்வுக்கு உணவின் தெளிவான புகைப்படத்தை அனுப்பவும்! 📸🍽️",
+                'te': f"🚫 ఇది కనిపిస్తోంది: {image_description}\n\n{ai_message}\n\nపోషకాహార విశ్లేషణ కోసం ఆహారం యొక్క స్పష్టమైన ఫోటోను పంపండి! 📸🍽️",
+                'hi': f"🚫 यह दिखाई दे रहा है: {image_description}\n\n{ai_message}\n\nपोषण विश्लेषण के लिए भोजन की स्पष्ट तस्वीर भेजें! 📸🍽️",
+                'kn': f"🚫 ಇದು ಕಾಣಿಸುತ್ತದೆ: {image_description}\n\n{ai_message}\n\nಪೋಷಣೆ ವಿಶ್ಲೇಷಣೆಗಾಗಿ ಆಹಾರದ ಸ್ಪಷ್ಟ ಫೋಟೋವನ್ನು ಕಳುಹಿಸಿ! 📸🍽️",
+                'ml': f"🚫 ഇത് കാണുന്നത്: {image_description}\n\n{ai_message}\n\nപോഷകാഹാര വിശകലനത്തിനായി ഭക്ഷണത്തിന്റെ വ്യക്തമായ ഫോട്ടോ അയയ്ക്കുക! 📸🍽️",
+                'mr': f"🚫 हे दिसत आहे: {image_description}\n\n{ai_message}\n\nपोषण विश्लेषणासाठी अन्नाचा स्पष्ट फोटो पाठवा! 📸🍽️",
+                'gu': f"🚫 આ દેખાય છે: {image_description}\n\n{ai_message}\n\nપોષણ વિશ્લેષણ માટે ખોરાકનો સ્પષ્ટ ફોટો મોકલો! 📸🍽️",
+                'bn': f"🚫 এটি দেখা যাচ্ছে: {image_description}\n\n{ai_message}\n\nপুষ্টি বিশ্লেষণের জন্য খাবারের স্পষ্ট ছবি পাঠান! 📸🍽️"
+            }
+            
+            return non_food_messages.get(language, non_food_messages['en'])
             
         except Exception as e:
             logger.error(f"Error creating non-food message: {e}")
             return self._get_non_food_fallback_message(language)
     
     def _get_non_food_fallback_message(self, language: str) -> str:
-        """Simple fallback message using existing get_message method"""
+        """Simple fallback message with hardcoded messages"""
         try:
-            return self.get_message(language, 'non_food_fallback')
+            fallback_messages = {
+                'en': "🚫 This doesn't appear to be a food image. Please send a clear photo of food for nutrition analysis!",
+                'ta': "🚫 இது உணவு படம் அல்ல. ஊட்டச்சத்து பகுப்பாய்வுக்கு உணவின் தெளிவான புகைப்படத்தை அனுப்பவும்!",
+                'te': "🚫 ఇది ఆహార చిత్రం కాదు. పోషకాహార విశ్లేషణ కోసం ఆహారం యొక్క స్పష్టమైన ఫోటోను పంపండి!",
+                'hi': "🚫 यह भोजन की तस्वीर नहीं लगती। कृपया पोषण विश्लेషण के लिए भोजन की स्पष्ट तस्वీर भेजें!",
+                'kn': "🚫 ಇದು ಆಹಾರ ಚಿತ್ರವಲ್ಲ. ಪೋಷಣೆ ವಿಶ್ಲೇಷಣೆಗಾಗಿ ಆಹಾರದ ಸ್ಪಷ್ಟ ಫೋಟೋವನ್ನು ಕಳುಹಿಸಿ!",
+                'ml': "🚫 ഇത് ഭക്ഷണ ചിത്രമല്ല. പോഷകാഹാര വിശകലനത്തിനായി ഭക്ഷണത്തിന്റെ വ്യക്തമായ ഫോട്ടോ അയയ്ക്കുക!",
+                'mr': "🚫 हा अन्नाचा फोटो नाही. पोषण विश्लेषणासाठी अन्नाचा स्पष्ट फोटो पाठवा!",
+                'gu': "🚫 આ ખોરાકનો ફોટો નથી. પોષણ વિશ્લેષણ માટે ખોરાકનો સ્પષ્ટ ફોટો મોકલો!",
+                'bn': "🚫 এটি খাবারের ছবি নয়। পুষ্টি বিশ্লেষণের জন্য খাবারের স্পষ্ট ছবি পাঠান!"
+            }
+            
+            return fallback_messages.get(language, fallback_messages['en'])
+            
         except Exception as e:
             logger.error(f"Error getting fallback message: {e}")
             # Ultimate hardcoded fallback
@@ -1552,7 +1563,7 @@ try:
     db_manager = DatabaseManager()
     s3_manager = S3Manager()
     language_manager = LanguageManager(db_manager)
-    analyzer = NutritionAnalyzer()
+    analyzer = NutritionAnalyzer(language_manager)
     whatsapp_bot = WhatsAppBot(WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID)
     elevenza_bot = ElevenZABot()
     logger.info("All components initialized successfully")
@@ -1729,7 +1740,7 @@ def handle_image_message(message: Dict[str, Any]):
                 user['user_id'], 
                 file_location, 
                 user_message,  # The formatted message for display
-                nutrition_json  # The complete structured data
+                json.dumps(nutrition_json) if nutrition_json else "{}"  # # Convert dict to JSON string
             )
             
             if not success:
@@ -2084,7 +2095,7 @@ def handle_11za_media_message(sender: str, content: Dict[str, Any]):
                 user['user_id'], 
                 file_location, 
                 user_message,  # The formatted message for display
-                nutrition_json  # The complete structured data
+                json.dumps(nutrition_json) if nutrition_json else "{}"  # The complete structured data
             )
             
             if not success:
