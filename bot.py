@@ -152,7 +152,7 @@ class DatabaseManager:
                 user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
                 file_location TEXT NOT NULL,
                 analysis_result TEXT,
-                language VARCHAR(500) NOT NULL DEFAULT 'en',
+                language VARCHAR(100) NOT NULL DEFAULT 'en',
                 
                 -- Dish identification
                 dish_name VARCHAR(20000),
@@ -526,7 +526,7 @@ class DatabaseManager:
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
-        
+
             # Extract data from nutrient_details if provided
             if nutrient_details:
                 dish_info = nutrient_details.get('dish_identification', {})
@@ -537,7 +537,7 @@ class DatabaseManager:
                 dietary_compatibility = dietary_info.get('dietary_compatibility', {})
                 improvements = nutrient_details.get('improvement_suggestions', {})
                 detailed_breakdown = nutrient_details.get('detailed_breakdown', {})
-            
+
                 cursor.execute("""
                     INSERT INTO nutrition_analysis (
                         user_id, file_location, analysis_result, language,
@@ -562,15 +562,22 @@ class DatabaseManager:
                         %s, %s, %s
                     )
                 """, (
-                    user_id, file_location, analysis_result, language,
+                    # Basic info - FIXED ORDER
+                    user_id,
+                    file_location,
+                    analysis_result,
+                    language,  # This should be 4th parameter
+
                     # Dish identification
                     dish_info.get('name'),
                     dish_info.get('cuisine_type'),
                     dish_info.get('confidence_level'),
                     dish_info.get('description'),
+
                     # Serving info
                     serving_info.get('estimated_weight_grams'),
                     serving_info.get('serving_description'),
+
                     # Nutrition facts
                     nutrition_facts.get('calories'),
                     nutrition_facts.get('protein_g'),
@@ -582,12 +589,14 @@ class DatabaseManager:
                     nutrition_facts.get('saturated_fat_g'),
                     nutrition_facts.get('key_vitamins', []),
                     nutrition_facts.get('key_minerals', []),
+
                     # Health analysis
                     health_analysis.get('health_score'),
                     health_analysis.get('health_grade'),
                     health_analysis.get('nutritional_strengths', []),
                     health_analysis.get('areas_of_concern', []),
                     health_analysis.get('overall_assessment'),
+
                     # Dietary information
                     dietary_info.get('potential_allergens', []),
                     dietary_compatibility.get('vegetarian'),
@@ -596,11 +605,13 @@ class DatabaseManager:
                     dietary_compatibility.get('dairy_free'),
                     dietary_compatibility.get('keto_friendly'),
                     dietary_compatibility.get('low_sodium'),
+
                     # Improvements
                     improvements.get('healthier_alternatives', []),
                     improvements.get('portion_recommendations'),
                     improvements.get('cooking_modifications', []),
                     improvements.get('nutritional_additions', []),
+
                     # Additional details
                     detailed_breakdown.get('ingredients_identified', []),
                     detailed_breakdown.get('cooking_method'),
@@ -612,14 +623,16 @@ class DatabaseManager:
                     INSERT INTO nutrition_analysis (user_id, file_location, analysis_result, language)
                     VALUES (%s, %s, %s, %s)
                 """, (user_id, file_location, analysis_result, language))
-        
+
             conn.commit()
             cursor.close()
             conn.close()
             return True
-        
+
         except Exception as e:
             logger.error(f"Error saving nutrition analysis: {e}")
+            if conn:
+                conn.rollback()
             return False
 
     def get_user_stats(self, user_id: int) -> Dict:
