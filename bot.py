@@ -554,7 +554,7 @@ class DatabaseManager:
                     'user_id': user_id,
                     'file_location': safe_truncate(file_location, 500, 'file_location'),
                     'analysis_result': analysis_result,  # TEXT field
-                    'language': safe_truncate(language, 10, 'language'),
+                    'language': safe_truncate(language, 100000, 'language'),
                     'dish_name': safe_truncate(dish_info.get('name'), 20000, 'dish_name'),
                     'cuisine_type': safe_truncate(dish_info.get('cuisine_type'), 20000, 'cuisine_type'),
                     'confidence_level': safe_truncate(dish_info.get('confidence_level'), 200, 'confidence_level'),
