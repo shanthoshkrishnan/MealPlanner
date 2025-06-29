@@ -378,18 +378,18 @@ class DatabaseManager:
         try:
             conn = self.get_connection()
             cursor = conn.cursor(cursor_factory=RealDictCursor)
-            
+        
             cursor.execute(
                 "SELECT * FROM users WHERE phone_number = %s",
                 (phone_number,)
             )
             user = cursor.fetchone()
-            
+        
             cursor.close()
             conn.close()
-            
+        
             return dict(user) if user else None
-            
+        
         except Exception as e:
             logger.error(f"Error getting user by phone: {e}")
             return None
@@ -413,6 +413,7 @@ class DatabaseManager:
             """, (phone_number, name, language))
 
             result = cursor.fetchone()
+            user_id = None
             if result:
                 user_id = result[0]
                 logger.info(f"User created/updated with user_id: {user_id}")
@@ -424,12 +425,35 @@ class DatabaseManager:
             # Clean up registration session
             self.delete_registration_session(phone_number)
             
-            return True
+            return user_id
             
         except Exception as e:
             logger.error(f"Error creating user: {e}")
-            return False
+            return None
     
+    def get_or_create_user(self, phone_number: str, name: str = None, language: str = 'en') -> Optional[int]:
+        """Get existing user or create new user, return user_id"""
+        try:
+            # First try to get existing user
+            existing_user = self.get_user_by_phone(phone_number)
+            if existing_user:
+                logger.info(f"Found existing user with user_id: {existing_user['user_id']}")
+                return existing_user['user_id']
+        
+            # If user doesn't exist and we have name, create new user
+            if name:
+                user_id = self.create_user(phone_number, name, language)
+                if user_id:
+                    logger.info(f"Created new user with user_id: {user_id}")
+                    return user_id
+        
+            logger.warning(f"Could not get or create user for phone: {phone_number}")
+            return None
+        
+        except Exception as e:
+            logger.error(f"Error in get_or_create_user: {e}")
+            return None
+
     def get_registration_session(self, phone_number: str) -> Optional[Dict]:
         """Get user registration session"""
         try:
@@ -476,6 +500,53 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error updating registration session: {e}")
             return False
+    def complete_user_registration(self, phone_number: str) -> Optional[int]:
+        """Complete user registration from session data and return user_id"""
+        try:
+            # Get registration session
+            session = self.get_registration_session(phone_number)
+            if not session:
+                logger.error(f"No registration session found for {phone_number}")
+                return None
+        
+            temp_data = session.get('temp_data', {})
+            name = temp_data.get('name')
+            language = temp_data.get('language', 'en')
+        
+            if not name:
+                logger.error(f"No name found in registration session for {phone_number}")
+                return None
+        
+            # Create the user
+            user_id = self.create_user(phone_number, name, language)
+            if user_id:
+                logger.info(f"Successfully completed registration for {phone_number} with user_id: {user_id}")
+                return user_id
+            else:
+                logger.error(f"Failed to create user during registration completion for {phone_number}")
+                return None
+        
+        except Exception as e:
+            logger.error(f"Error completing user registration: {e}")
+            return None
+
+    def get_next_user_id(self) -> int:
+        """Get the next available user_id (for reference only - PostgreSQL SERIAL handles this automatically)"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+        
+            cursor.execute("SELECT COALESCE(MAX(user_id), 0) + 1 FROM users")
+            next_id = cursor.fetchone()[0]
+        
+            cursor.close()
+            conn.close()
+        
+            return next_id
+        
+        except Exception as e:
+            logger.error(f"Error getting next user ID: {e}")
+            return 1
     
     def update_user_language(self, phone_number: str, language: str) -> bool:
         """Update user's preferred language using phone number"""
@@ -522,127 +593,240 @@ class DatabaseManager:
             return False
     
     def save_nutrition_analysis(self, user_id: int, file_location: str, analysis_result: str, language: str = 'en', nutrient_details: dict = None) -> bool:
-        """Save nutrition analysis to database with separate nutrient columns - DEBUG VERSION"""
+        """Save nutrition analysis to database with proper data extraction - ROBUST VERSION"""
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
 
-            
-            # Helper function to safely truncate strings and log issues
+            # Helper function to safely truncate strings
             def safe_truncate(value, max_length, field_name="unknown"):
                 if value is None:
                     return None
                 str_value = str(value)
                 if len(str_value) > max_length:
                     logger.warning(f"Truncating {field_name}: {len(str_value)} chars to {max_length}")
-                    logger.debug(f"Original value: {str_value[:100]}...")
                     return str_value[:max_length]
                 return str_value
-            
-            # Add debug logging
-            logger.debug(f"save_nutrition_analysis called with:")
-            logger.debug(f"  user_id: {user_id}")
-            logger.debug(f"  language: '{language[:50]}...' (length: {len(language)} chars)")
-            logger.debug(f"  analysis_result length: {len(analysis_result)} chars")
+
+            # Helper function to safely get numeric values
+            def safe_numeric(value, default=None):
+                if value is None:
+                    return default
+                try:
+                    if isinstance(value, (int, float)):
+                        return value
+                    return float(value) if '.' in str(value) else int(value)
+                except (ValueError, TypeError):
+                    return default
+
+            # Helper function to safely get boolean values
+            def safe_boolean(value, default=None):
+                if value is None:
+                    return default
+                if isinstance(value, bool):
+                    return value
+                if isinstance(value, str):
+                    return value.lower() in ('true', '1', 'yes', 'on')
+                return bool(value)
+
+            # Helper function to safely get array values
+            def safe_array(value, default=None):
+                if value is None:
+                    return default or []
+                if isinstance(value, list):
+                    return [str(item) for item in value if item is not None]
+                return [str(value)] if value else []
+
+            logger.debug(f"Starting nutrition analysis save for user_id: {user_id}")
+            logger.debug(f"Language: '{language}' (length: {len(language)})")
+            logger.debug(f"Analysis result length: {len(analysis_result)}")
+
+            # Initialize default values
+            default_values = {
+                'user_id': user_id,
+                'file_location': safe_truncate(file_location, 500, 'file_location'),
+                'analysis_result': analysis_result,
+                'language': language,
+                'dish_name': None,
+                'cuisine_type': None,
+                'confidence_level': None,
+                'dish_description': None,
+                'estimated_weight_grams': None,
+                'serving_description': None,
+                'calories': None,
+                'protein_g': None,
+                'carbohydrates_g': None,
+                'fat_g': None,
+                'fiber_g': None,
+                'sugar_g': None,
+                'sodium_mg': None,
+                'saturated_fat_g': None,
+                'key_vitamins': [],
+                'key_minerals': [],
+                'health_score': None,
+                'health_grade': None,
+                'nutritional_strengths': [],
+                'areas_of_concern': [],
+                'overall_assessment': None,
+                'potential_allergens': [],
+                'is_vegetarian': None,
+                'is_vegan': None,
+                'is_gluten_free': None,
+                'is_dairy_free': None,
+                'is_keto_friendly': None,
+                'is_low_sodium': None,
+                'healthier_alternatives': [],
+                'portion_recommendations': None,
+                'cooking_modifications': [],
+                'nutritional_additions': [],
+                'ingredients_identified': [],
+                'cooking_method': None,
+                'meal_category': None
+            }
 
             # Extract data from nutrient_details if provided
-            if nutrient_details:
-                dish_info = nutrient_details.get('dish_identification', {})
-                serving_info = nutrient_details.get('serving_info', {})
-                nutrition_facts = nutrient_details.get('nutrition_facts', {})
-                health_analysis = nutrient_details.get('health_analysis', {})
-                dietary_info = nutrient_details.get('dietary_information', {})
-                dietary_compatibility = dietary_info.get('dietary_compatibility', {})
-                improvements = nutrient_details.get('improvement_suggestions', {})
-                detailed_breakdown = nutrient_details.get('detailed_breakdown', {})
-            
-                # Prepare and log all values
-                values = {
-                    'user_id': user_id,
-                    'file_location': safe_truncate(file_location, 500, 'file_location'),
-                    'analysis_result': analysis_result,  # TEXT field
-                    'language': language,
-                    'dish_name': safe_truncate(dish_info.get('name'), 20000, 'dish_name'),
-                    'cuisine_type': safe_truncate(dish_info.get('cuisine_type'), 20000, 'cuisine_type'),
-                    'confidence_level': safe_truncate(dish_info.get('confidence_level'), 200, 'confidence_level'),
-                    'dish_description': dish_info.get('description'),  # TEXT
-                    'estimated_weight_grams': serving_info.get('estimated_weight_grams'),
-                    'serving_description': safe_truncate(serving_info.get('serving_description'), 20000, 'serving_description'),
-                    'calories': nutrition_facts.get('calories'),
-                    'protein_g': nutrition_facts.get('protein_g'),
-                    'carbohydrates_g': nutrition_facts.get('carbohydrates_g'),
-                    'fat_g': nutrition_facts.get('fat_g'),
-                    'fiber_g': nutrition_facts.get('fiber_g'),
-                    'sugar_g': nutrition_facts.get('sugar_g'),
-                    'sodium_mg': nutrition_facts.get('sodium_mg'),
-                    'saturated_fat_g': nutrition_facts.get('saturated_fat_g'),
-                    'key_vitamins': nutrition_facts.get('key_vitamins', []),
-                    'key_minerals': nutrition_facts.get('key_minerals', []),
-                    'health_score': health_analysis.get('health_score'),
-                    'health_grade': safe_truncate(health_analysis.get('health_grade'), 5, 'health_grade'),
-                    'nutritional_strengths': health_analysis.get('nutritional_strengths', []),
-                    'areas_of_concern': health_analysis.get('areas_of_concern', []),
-                    'overall_assessment': health_analysis.get('overall_assessment'),  # TEXT
-                    'potential_allergens': dietary_info.get('potential_allergens', []),
-                    'is_vegetarian': dietary_compatibility.get('vegetarian'),
-                    'is_vegan': dietary_compatibility.get('vegan'),
-                    'is_gluten_free': dietary_compatibility.get('gluten_free'),
-                    'is_dairy_free': dietary_compatibility.get('dairy_free'),
-                    'is_keto_friendly': dietary_compatibility.get('keto_friendly'),
-                    'is_low_sodium': dietary_compatibility.get('low_sodium'),
-                    'healthier_alternatives': improvements.get('healthier_alternatives', []),
-                    'portion_recommendations': improvements.get('portion_recommendations'),  # TEXT
-                    'cooking_modifications': improvements.get('cooking_modifications', []),
-                    'nutritional_additions': improvements.get('nutritional_additions', []),
-                    'ingredients_identified': detailed_breakdown.get('ingredients_identified', []),
-                    'cooking_method': safe_truncate(detailed_breakdown.get('cooking_method'), 2000, 'cooking_method'),
-                    'meal_category': safe_truncate(detailed_breakdown.get('meal_category'), 2000, 'meal_category')
-                }
-            
-                # Log the values for debugging
-                logger.debug(f"Inserting nutrition analysis with values: {values}")
-        
-                cursor.execute("""
-                    INSERT INTO nutrition_analysis (
-                        user_id, file_location, analysis_result, language,
-                        dish_name, cuisine_type, confidence_level, dish_description,
-                        estimated_weight_grams, serving_description,
-                        calories, protein_g, carbohydrates_g, fat_g, fiber_g, sugar_g, 
-                        sodium_mg, saturated_fat_g, key_vitamins, key_minerals,
-                        health_score, health_grade, nutritional_strengths, areas_of_concern, overall_assessment,
-                        potential_allergens, is_vegetarian, is_vegan, is_gluten_free, is_dairy_free, 
-                        is_keto_friendly, is_low_sodium,
-                        healthier_alternatives, portion_recommendations, cooking_modifications, nutritional_additions,
-                        ingredients_identified, cooking_method, meal_category
-                    )
-                    VALUES (
-                        %s, %s, %s, %s,
-                        %s, %s, %s, %s,
-                        %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s,
-                        %s, %s, %s
-                    )
-                """, tuple(values.values()))
-            else:
-                # Fallback for cases without nutrient_details
-                cursor.execute("""
-                    INSERT INTO nutrition_analysis (user_id, file_location, analysis_result, language)
-                    VALUES (%s, %s, %s, %s)
-                """, (user_id, safe_truncate(file_location, 500, 'file_location'), analysis_result, language))
-    
+            if nutrient_details and isinstance(nutrient_details, dict):
+                try:
+                    logger.debug("Extracting data from nutrient_details...")
+                
+                    # Dish identification
+                    dish_info = nutrient_details.get('dish_identification', {})
+                    if dish_info:
+                        default_values['dish_name'] = safe_truncate(dish_info.get('name'), 20000, 'dish_name')
+                        default_values['cuisine_type'] = safe_truncate(dish_info.get('cuisine_type'), 20000, 'cuisine_type')
+                        default_values['confidence_level'] = safe_truncate(dish_info.get('confidence_level'), 200, 'confidence_level')
+                        default_values['dish_description'] = dish_info.get('description')
+
+                    # Serving information
+                    serving_info = nutrient_details.get('serving_info', {})
+                    if serving_info:
+                        default_values['estimated_weight_grams'] = safe_numeric(serving_info.get('estimated_weight_grams'))
+                        default_values['serving_description'] = safe_truncate(serving_info.get('serving_description'), 20000, 'serving_description')
+
+                    # Nutrition facts
+                    nutrition_facts = nutrient_details.get('nutrition_facts', {})
+                    if nutrition_facts:
+                        default_values['calories'] = safe_numeric(nutrition_facts.get('calories'))
+                        default_values['protein_g'] = safe_numeric(nutrition_facts.get('protein_g'))
+                        default_values['carbohydrates_g'] = safe_numeric(nutrition_facts.get('carbohydrates_g'))
+                        default_values['fat_g'] = safe_numeric(nutrition_facts.get('fat_g'))
+                        default_values['fiber_g'] = safe_numeric(nutrition_facts.get('fiber_g'))
+                        default_values['sugar_g'] = safe_numeric(nutrition_facts.get('sugar_g'))
+                        default_values['sodium_mg'] = safe_numeric(nutrition_facts.get('sodium_mg'))
+                        default_values['saturated_fat_g'] = safe_numeric(nutrition_facts.get('saturated_fat_g'))
+                        default_values['key_vitamins'] = safe_array(nutrition_facts.get('key_vitamins'))
+                        default_values['key_minerals'] = safe_array(nutrition_facts.get('key_minerals'))
+
+                    # Health analysis
+                    health_analysis = nutrient_details.get('health_analysis', {})
+                    if health_analysis:
+                        default_values['health_score'] = safe_numeric(health_analysis.get('health_score'))
+                        default_values['health_grade'] = safe_truncate(health_analysis.get('health_grade'), 5, 'health_grade')
+                        default_values['nutritional_strengths'] = safe_array(health_analysis.get('nutritional_strengths'))
+                        default_values['areas_of_concern'] = safe_array(health_analysis.get('areas_of_concern'))
+                        default_values['overall_assessment'] = health_analysis.get('overall_assessment')
+
+                    # Dietary information
+                    dietary_info = nutrient_details.get('dietary_information', {})
+                    if dietary_info:
+                        default_values['potential_allergens'] = safe_array(dietary_info.get('potential_allergens'))
+                    
+                        # Dietary compatibility
+                        dietary_compatibility = dietary_info.get('dietary_compatibility', {})
+                        if dietary_compatibility:
+                            default_values['is_vegetarian'] = safe_boolean(dietary_compatibility.get('vegetarian'))
+                            default_values['is_vegan'] = safe_boolean(dietary_compatibility.get('vegan'))
+                            default_values['is_gluten_free'] = safe_boolean(dietary_compatibility.get('gluten_free'))
+                            default_values['is_dairy_free'] = safe_boolean(dietary_compatibility.get('dairy_free'))
+                            default_values['is_keto_friendly'] = safe_boolean(dietary_compatibility.get('keto_friendly'))
+                            default_values['is_low_sodium'] = safe_boolean(dietary_compatibility.get('low_sodium'))
+
+                    # Improvement suggestions
+                    improvements = nutrient_details.get('improvement_suggestions', {})
+                    if improvements:
+                        default_values['healthier_alternatives'] = safe_array(improvements.get('healthier_alternatives'))
+                        default_values['portion_recommendations'] = improvements.get('portion_recommendations')
+                        default_values['cooking_modifications'] = safe_array(improvements.get('cooking_modifications'))
+                        default_values['nutritional_additions'] = safe_array(improvements.get('nutritional_additions'))
+
+                    # Detailed breakdown
+                    detailed_breakdown = nutrient_details.get('detailed_breakdown', {})
+                    if detailed_breakdown:
+                        default_values['ingredients_identified'] = safe_array(detailed_breakdown.get('ingredients_identified'))
+                        default_values['cooking_method'] = safe_truncate(detailed_breakdown.get('cooking_method'), 2000, 'cooking_method')
+                        default_values['meal_category'] = safe_truncate(detailed_breakdown.get('meal_category'), 2000, 'meal_category')
+
+                    logger.debug("Data extraction completed successfully")
+
+                except Exception as e:
+                    logger.error(f"Error extracting nutrient details: {e}")
+                    logger.debug("Continuing with default values...")
+
+            # Log some key values for debugging
+            logger.debug(f"Final values - dish_name: {default_values['dish_name']}")
+            logger.debug(f"Final values - calories: {default_values['calories']}")
+            logger.debug(f"Final values - health_score: {default_values['health_score']}")
+
+            # Execute the insert query
+            cursor.execute("""
+                INSERT INTO nutrition_analysis (
+                    user_id, file_location, analysis_result, language,
+                    dish_name, cuisine_type, confidence_level, dish_description,
+                    estimated_weight_grams, serving_description,
+                    calories, protein_g, carbohydrates_g, fat_g, fiber_g, sugar_g, 
+                    sodium_mg, saturated_fat_g, key_vitamins, key_minerals,
+                    health_score, health_grade, nutritional_strengths, areas_of_concern, overall_assessment,
+                    potential_allergens, is_vegetarian, is_vegan, is_gluten_free, is_dairy_free, 
+                    is_keto_friendly, is_low_sodium,
+                    healthier_alternatives, portion_recommendations, cooking_modifications, nutritional_additions,
+                    ingredients_identified, cooking_method, meal_category
+                )
+                VALUES (
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s
+                )
+            """, (
+                default_values['user_id'], default_values['file_location'], 
+                default_values['analysis_result'], default_values['language'],
+                default_values['dish_name'], default_values['cuisine_type'], 
+                default_values['confidence_level'], default_values['dish_description'],
+                default_values['estimated_weight_grams'], default_values['serving_description'],
+                default_values['calories'], default_values['protein_g'], 
+                default_values['carbohydrates_g'], default_values['fat_g'], 
+                default_values['fiber_g'], default_values['sugar_g'], 
+                default_values['sodium_mg'], default_values['saturated_fat_g'], 
+                default_values['key_vitamins'], default_values['key_minerals'],
+                default_values['health_score'], default_values['health_grade'], 
+                default_values['nutritional_strengths'], default_values['areas_of_concern'], 
+                default_values['overall_assessment'],
+                default_values['potential_allergens'], default_values['is_vegetarian'], 
+                default_values['is_vegan'], default_values['is_gluten_free'], 
+                default_values['is_dairy_free'], default_values['is_keto_friendly'], 
+                default_values['is_low_sodium'],
+                default_values['healthier_alternatives'], default_values['portion_recommendations'], 
+                default_values['cooking_modifications'], default_values['nutritional_additions'],
+                default_values['ingredients_identified'], default_values['cooking_method'], 
+                default_values['meal_category']
+            ))
+
             conn.commit()
             cursor.close()
             conn.close()
-            logger.info(f"Successfully saved nutrition analysis for user {user_id}")
+        
+            logger.info(f"Successfully saved nutrition analysis for user {user_id} with all nutrient details")
             return True
-    
+
         except Exception as e:
             logger.error(f"Error saving nutrition analysis: {e}")
             logger.error(f"Error details - user_id: {user_id}, language: {language}")
-            if conn:
+            logger.exception("Full traceback:")
+            if 'conn' in locals() and conn:
                 conn.rollback()
             return False
 
@@ -1049,29 +1233,7 @@ class LanguageManager:
                         "no_registration_session": "❌ নিবন্ধন সেশন পাওয়া যায়নি। শুরু করতে 'start' টাইপ করুন।",
                         "user_incomplete": "❌ ব্যবহারকারীর নিবন্ধন অসম্পূর্ণ। পুনরায় নিবন্ধনের জন্য 'start' টাইপ করুন।",
                         "unknown_command": "❌ সেই কমান্ড আমি বুঝতে পারিনি। উপলব্ধ কমান্ড দেখতে 'help' টাইপ করুন বা বিশ্লেষণের জন্য খাবারের ফটো পাঠান।",
-                    },
-                    "non_food_image": {
-                        "en": "🚫 **Not a Food Image**\n\n📷 I can see: {image_description}\n\n💡 {ai_message}\n\n🍽️ Please send a clear photo of food, meals, or dishes for nutrition analysis!",
-                        "ta": "🚫 **உணவு படம் அல்ல**\n\n📷 நான் பார்க்கிறேன்: {image_description}\n\n💡 {ai_message}\n\n🍽️ ஊட்டச்சத்து பகுப்பாய்வுக்காக உணவு, உணவுகள் அல்லது உணவு வகைகளின் தெளிவான புகைப்படத்தை அனுப்பவும்!",
-                        "hi": "🚫 **खाना की तस्वीर नहीं**\n\n📷 मैं देख सकता हूं: {image_description}\n\n💡 {ai_message}\n\n🍽️ कृपया पोषण विश्लेषण के लिए भोजन, खाना या व्यंजन की स्पष्ट तस्वीर भेजें!",
-                        "te": "🚫 **ఆహార చిత్రం కాదు**\n\n📷 నేను చూడగలను: {image_description}\n\n💡 {ai_message}\n\n🍽️ దయచేసి పోషక విశ్లేషణ కోసం ఆహారం, భోజనం లేదా వంటకాల స్పష్టమైన ఫోటో పంపండి!",
-                        "kn": "🚫 **ಆಹಾರ ಚಿತ್ರವಲ್ಲ**\n\n📷 ನಾನು ನೋಡಬಹುದು: {image_description}\n\n💡 {ai_message}\n\n🍽️ ದಯವಿಟ್ಟು ಪೋಷಣೆ ವಿಶ್ಲೇಷಣೆಗಾಗಿ ಆಹಾರ, ಊಟ ಅಥವಾ ಭಕ್ಷ್ಯಗಳ ಸ್ಪಷ್ಟ ಫೋಟೋ ಕಳುಹಿಸಿ!",
-                        "ml": "🚫 **ഭക്ഷണ ചിത്രമല്ല**\n\n📷 എനിക്ക് കാണാൻ കഴിയും: {image_description}\n\n💡 {ai_message}\n\n🍽️ ദയവായി പോഷകാഹാര വിശകലനത്തിനായി ഭക്ഷണം, ഭക്ഷണം അല്ലെങ്കിൽ വിഭവങ്ങളുടെ വ്യക്തമായ ഫോട്ടോ അയയ്ക്കുക!",
-                        "mr": "🚫 **अन्नाचे चित्र नाही**\n\n📷 मी पाहू शकतो: {image_description}\n\n💡 {ai_message}\n\n🍽️ कृपया पोषण विश्लेषणासाठी अन्न, जेवण किंवा पदार्थांचे स्पष्ट फोटो पाठवा!",
-                        "gu": "🚫 **ખોરાકનું ચિત્ર નથી**\n\n📷 હું જોઈ શકું છું: {image_description}\n\n💡 {ai_message}\n\n🍽️ કૃપા કરીને પોષણ વિશ્લેષણ માટે ખોરાક, ભોજન અથવા વાનગીઓનો સ્પષ્ટ ફોટો મોકલો!",
-                        "bn": "🚫 **খাবারের ছবি নয়**\n\n📷 আমি দেখতে পাচ্ছি: {image_description}\n\n💡 {ai_message}\n\n🍽️ দয়া করে পুষ্টি বিশ্লেষণের জন্য খাবার, খাদ্য বা পদের স্পষ্ট ছবি পাঠান!",
-                    },
-                    "non_food_fallback": {
-                        "en": "🚫 This doesn't appear to be a food image. Please send a clear photo of food for nutrition analysis!",
-                        "ta": "🚫 இது உணவு படம் போல் தெரியவில்லை. ஊட்டச்சத்து பகுப்பாய்வுக்கு உணவின் தெளிவான புகைப்படத்தை அனுப்பவும்!",
-                        "hi": "🚫 यह खाने की तस्वीर नहीं लगती। कृपया पोषण विश्लेषण के लिए भोजन की स्पष्ट तस्वीर भेजें!",
-                        "te": "🚫 ఇది ఆహార చిత్రంగా కనిపించడం లేదు. దయచేసి పోషక విశ్లేషణ కోసం ఆహారం యొక్క స్పష్టమైన ఫోటో పంపండి!",
-                        "kn": "🚫 ಇದು ಆಹಾರ ಚಿತ್ರವಾಗಿ ಕಾಣುತ್ತಿಲ್ಲ. ದಯವಿಟ್ಟು ಪೋಷಣೆ ವಿಶ್ಲೇಷಣೆಗಾಗಿ ಆಹಾರದ ಸ್ಪಷ್ಟ ಫೋಟೋ ಕಳುಹಿಸಿ!",
-                        "ml": "🚫 ഇത് ഭക്ഷണ ചിത്രമായി തോന്നുന്നില്ല. ദയവായി പോഷകാഹാര വിശകലനത്തിനായി ഭക്ഷണത്തിന്റെ വ്യക്തമായ ഫോട്ടോ അയയ്ക്കുക!",
-                        "mr": "🚫 हे अन्नाचे चित्र वाटत नाही. कृपया पोषण विश्लेषणासाठी अन्नाचे स्पष्ट फोटो पाठवा!",
-                        "gu": "🚫 આ ખોરાકનું ચિત્ર લાગતું નથી. કૃપા કરીને પોષણ વિશ્લેષણ માટે ખોરાકનો સ્પષ્ટ ફોટો મોકલો!",
-                        "bn": "🚫 এটি খাবারের ছবি বলে মনে হচ্ছে না। দয়া করে পুষ্টি বিশ্লেষণের জন্য খাবারের স্পষ্ট ছবি পাঠান!",
-                    },
+                    }
                 }
 
                 # Insert default messages
