@@ -152,17 +152,17 @@ class DatabaseManager:
                 user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
                 file_location TEXT NOT NULL,
                 analysis_result TEXT,
-                language VARCHAR(50) NOT NULL DEFAULT 'en',
+                language VARCHAR(500) NOT NULL DEFAULT 'en',
                 
                 -- Dish identification
-                dish_name VARCHAR(200),
-                cuisine_type VARCHAR(100),
-                confidence_level VARCHAR(20),
+                dish_name VARCHAR(20000),
+                cuisine_type VARCHAR(20000),
+                confidence_level VARCHAR(200),
                 dish_description TEXT,
                 
                 -- Serving information
                 estimated_weight_grams INTEGER,
-                serving_description VARCHAR(200),
+                serving_description VARCHAR(20000),
                 
                 -- Nutrition facts (per serving)
                 calories INTEGER,
@@ -202,8 +202,8 @@ class DatabaseManager:
                 
                 -- Additional details
                 ingredients_identified TEXT[],
-                cooking_method VARCHAR(100),
-                meal_category VARCHAR(50),
+                cooking_method VARCHAR(2000),
+                meal_category VARCHAR(2000),
                 
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
