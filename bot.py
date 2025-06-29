@@ -209,7 +209,7 @@ class DatabaseManager:
             );
             """
         ])
-        
+
             # Step 5: Create user_registration_sessions table
             self._execute_sql_safely([
                 """
@@ -592,7 +592,7 @@ class DatabaseManager:
             logger.error(f"Error deleting registration session: {e}")
             return False
     
-    def save_nutrition_analysis(self, user_id: int, file_location: str, analysis_result: str, language: str = 'en', nutrient_details: dict = None) -> bool:
+    def save_nutrition_analysis(self, user_id: int, file_location: str, analysis_result: str, language: str = 'en', nutrition_data: dict = None) -> bool:
         """Save nutrition analysis to database with proper data extraction - ROBUST VERSION"""
         try:
             conn = self.get_connection()
@@ -685,12 +685,12 @@ class DatabaseManager:
             }
 
             # Extract data from nutrient_details if provided
-            if nutrient_details and isinstance(nutrient_details, dict):
+            if nutrition_data and isinstance(nutrition_data, dict) and nutrition_data.get('is_food', True):
                 try:
-                    logger.debug("Extracting data from nutrient_details...")
+                    logger.debug("Extracting data from already parsed nutrition_data...")
                 
                     # Dish identification
-                    dish_info = nutrient_details.get('dish_identification', {})
+                    dish_info = nutrition_data.get('dish_identification', {})
                     if dish_info:
                         default_values['dish_name'] = safe_truncate(dish_info.get('name'), 20000, 'dish_name')
                         default_values['cuisine_type'] = safe_truncate(dish_info.get('cuisine_type'), 20000, 'cuisine_type')
@@ -698,13 +698,13 @@ class DatabaseManager:
                         default_values['dish_description'] = dish_info.get('description')
 
                     # Serving information
-                    serving_info = nutrient_details.get('serving_info', {})
+                    serving_info = nutrition_data.get('serving_info', {})
                     if serving_info:
                         default_values['estimated_weight_grams'] = safe_numeric(serving_info.get('estimated_weight_grams'))
                         default_values['serving_description'] = safe_truncate(serving_info.get('serving_description'), 20000, 'serving_description')
 
                     # Nutrition facts
-                    nutrition_facts = nutrient_details.get('nutrition_facts', {})
+                    nutrition_facts = nutrition_data.get('nutrition_facts', {})
                     if nutrition_facts:
                         default_values['calories'] = safe_numeric(nutrition_facts.get('calories'))
                         default_values['protein_g'] = safe_numeric(nutrition_facts.get('protein_g'))
@@ -718,7 +718,7 @@ class DatabaseManager:
                         default_values['key_minerals'] = safe_array(nutrition_facts.get('key_minerals'))
 
                     # Health analysis
-                    health_analysis = nutrient_details.get('health_analysis', {})
+                    health_analysis = nutrition_data.get('health_analysis', {})
                     if health_analysis:
                         default_values['health_score'] = safe_numeric(health_analysis.get('health_score'))
                         default_values['health_grade'] = safe_truncate(health_analysis.get('health_grade'), 5, 'health_grade')
@@ -727,7 +727,7 @@ class DatabaseManager:
                         default_values['overall_assessment'] = health_analysis.get('overall_assessment')
 
                     # Dietary information
-                    dietary_info = nutrient_details.get('dietary_information', {})
+                    dietary_info = nutrition_data.get('dietary_information', {})
                     if dietary_info:
                         default_values['potential_allergens'] = safe_array(dietary_info.get('potential_allergens'))
                     
@@ -742,7 +742,7 @@ class DatabaseManager:
                             default_values['is_low_sodium'] = safe_boolean(dietary_compatibility.get('low_sodium'))
 
                     # Improvement suggestions
-                    improvements = nutrient_details.get('improvement_suggestions', {})
+                    improvements = nutrition_data.get('improvement_suggestions', {})
                     if improvements:
                         default_values['healthier_alternatives'] = safe_array(improvements.get('healthier_alternatives'))
                         default_values['portion_recommendations'] = improvements.get('portion_recommendations')
@@ -750,13 +750,13 @@ class DatabaseManager:
                         default_values['nutritional_additions'] = safe_array(improvements.get('nutritional_additions'))
 
                     # Detailed breakdown
-                    detailed_breakdown = nutrient_details.get('detailed_breakdown', {})
+                    detailed_breakdown = nutrition_data.get('detailed_breakdown', {})
                     if detailed_breakdown:
                         default_values['ingredients_identified'] = safe_array(detailed_breakdown.get('ingredients_identified'))
                         default_values['cooking_method'] = safe_truncate(detailed_breakdown.get('cooking_method'), 2000, 'cooking_method')
                         default_values['meal_category'] = safe_truncate(detailed_breakdown.get('meal_category'), 2000, 'meal_category')
 
-                    logger.debug("Data extraction completed successfully")
+                    logger.debug("Data extraction from parsed JSON completed successfully")
 
                 except Exception as e:
                     logger.error(f"Error extracting nutrient details: {e}")
