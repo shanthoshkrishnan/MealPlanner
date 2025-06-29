@@ -87,6 +87,18 @@ except Exception as e:
     logger.error(f"Failed to configure AWS S3: {e}")
     raise
 
+def safe_json_serialize(obj):
+    """Safely serialize objects to JSON, handling datetime objects"""
+    def json_serial(obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        raise TypeError(f"Type {type(obj)} not serializable")
+    
+    try:
+        return json.dumps(obj, default=json_serial, indent=2)
+    except Exception as e:
+        return str(obj)
+    
 class DatabaseManager:
     def __init__(self):
         self.database_url = DATABASE_URL
@@ -1084,7 +1096,7 @@ class LanguageManager:
         """Get formatted language options for user selection using full names"""
         options = []
         for code, name in self.languages.items():
-            options.append(f"• **{name.split(' (')[0]}**")  # Remove script part for cleaner display
+            options.append(f"• {name.split(' (')[0]}")  # Remove script part for cleaner display
 
         return "🌍 Please select your preferred language:\n\n" + "\n".join(options) + "\n\n💬 Reply with the full language name (e.g., English, Tamil, Hindi)"
 
@@ -1963,15 +1975,15 @@ def handle_11za_text_message(sender: str, content: Dict[str, Any]):
         # ENHANCED DEBUGGING - Check if user exists
         user = db_manager.get_user_by_phone(sender)
         
-        # Add detailed logging for debugging
+        # Add detailed logging for debugging - FIXED
         logger.info(f"DEBUG: User lookup for {sender}")
-        logger.info(f"DEBUG: User data: {json.dumps(user) if user else 'None'}")
+        logger.info(f"DEBUG: User data: {safe_json_serialize(user) if user else 'None'}")
         logger.info(f"DEBUG: User type: {type(user)}")
         logger.info(f"DEBUG: User truthiness: {bool(user)}")
         
         # Check for registration session
         session = db_manager.get_registration_session(sender)
-        logger.info(f"DEBUG: Registration session: {json.dumps(session) if session else 'None'}")
+        logger.info(f"DEBUG: Registration session: {safe_json_serialize(session) if session else 'None'}")
         
         # Handle different text commands
         if text_content in ['start', 'hello', 'hi', 'hey']:
@@ -2106,7 +2118,7 @@ def handle_11za_start_command(sender: str, user: Optional[Dict]):
     try:
         logger.info(f"DEBUG: handle_11za_start_command called")
         logger.info(f"DEBUG: sender: {sender}")
-        logger.info(f"DEBUG: user: {json.dumps(user) if user else 'None'}")
+        logger.info(f"DEBUG: user: {safe_json_serialize(user) if user else 'None'}")  # FIXED
         logger.info(f"DEBUG: user evaluation: {bool(user)}")
         
         if user:
