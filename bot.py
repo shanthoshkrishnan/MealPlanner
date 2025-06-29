@@ -152,7 +152,7 @@ class DatabaseManager:
                 user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
                 file_location TEXT NOT NULL,
                 analysis_result TEXT,
-                language VARCHAR(10) NOT NULL DEFAULT 'en',
+                language VARCHAR(50) NOT NULL DEFAULT 'en',
                 
                 -- Dish identification
                 dish_name VARCHAR(200),
