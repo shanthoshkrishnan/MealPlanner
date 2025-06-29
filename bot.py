@@ -152,7 +152,7 @@ class DatabaseManager:
                 user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
                 file_location TEXT NOT NULL,
                 analysis_result TEXT,
-                language VARCHAR(100) NOT NULL DEFAULT 'en',
+                language TEXT NOT NULL DEFAULT 'en',  -- Changed from VARCHAR(100) to TEXT
                 
                 -- Dish identification
                 dish_name VARCHAR(20000),
@@ -527,12 +527,6 @@ class DatabaseManager:
             conn = self.get_connection()
             cursor = conn.cursor()
 
-            logger.debug(f"save_nutrition_analysis called with:")
-            logger.debug(f"  user_id: {user_id}")
-            logger.debug(f"  file_location: {file_location[:100]}..." if len(file_location) > 100 else f"  file_location: {file_location}")
-            logger.debug(f"  analysis_result length: {len(analysis_result)} chars")
-            logger.debug(f"  language: '{language}' (length: {len(language)} chars)")
-            logger.debug(f"  nutrient_details provided: {nutrient_details is not None}")
             
             # Helper function to safely truncate strings and log issues
             def safe_truncate(value, max_length, field_name="unknown"):
@@ -544,7 +538,13 @@ class DatabaseManager:
                     logger.debug(f"Original value: {str_value[:100]}...")
                     return str_value[:max_length]
                 return str_value
-    
+            
+            # Add debug logging
+            logger.debug(f"save_nutrition_analysis called with:")
+            logger.debug(f"  user_id: {user_id}")
+            logger.debug(f"  language: '{language[:50]}...' (length: {len(language)} chars)")
+            logger.debug(f"  analysis_result length: {len(analysis_result)} chars")
+
             # Extract data from nutrient_details if provided
             if nutrient_details:
                 dish_info = nutrient_details.get('dish_identification', {})
@@ -561,7 +561,7 @@ class DatabaseManager:
                     'user_id': user_id,
                     'file_location': safe_truncate(file_location, 500, 'file_location'),
                     'analysis_result': analysis_result,  # TEXT field
-                    'language': safe_truncate(language, 100, 'language'),
+                    'language': language,
                     'dish_name': safe_truncate(dish_info.get('name'), 20000, 'dish_name'),
                     'cuisine_type': safe_truncate(dish_info.get('cuisine_type'), 20000, 'cuisine_type'),
                     'confidence_level': safe_truncate(dish_info.get('confidence_level'), 200, 'confidence_level'),
@@ -631,7 +631,7 @@ class DatabaseManager:
                 cursor.execute("""
                     INSERT INTO nutrition_analysis (user_id, file_location, analysis_result, language)
                     VALUES (%s, %s, %s, %s)
-                """, (user_id, safe_truncate(file_location, 500, 'file_location'), analysis_result, safe_truncate(language, 100, 'language')))
+                """, (user_id, safe_truncate(file_location, 500, 'file_location'), analysis_result, language))
     
             conn.commit()
             cursor.close()
