@@ -595,6 +595,12 @@ class DatabaseManager:
     def save_nutrition_analysis(self, user_id: int, file_location: str, analysis_result: str, language: str = 'en', nutrition_data: dict = None) -> bool:
         """Save nutrition analysis to database - SIMPLIFIED VERSION"""
         try:
+
+            print(f"🔍 SAVE_ANALYSIS CALLED:")
+            print(f"   - user_id: {user_id}")
+            print(f"   - language param: '{language}'")
+            print(f"   - nutrition_data type: {type(nutrition_data)}")
+            
             conn = self.get_connection()
             cursor = conn.cursor()
 
@@ -602,7 +608,14 @@ class DatabaseManager:
 
             # Extract all fields using helper method
             db_fields = self._extract_fields_for_db(nutrition_data, language)
-        
+            
+            # RENDER DEBUG 6: Post-extraction check
+            print(f"🔍 DB_FIELDS AFTER EXTRACTION:")
+            print(f"   - language: '{db_fields.get('language')}'")
+            print(f"   - calories: {db_fields.get('calories')}")
+            print(f"   - dish_name: {db_fields.get('dish_name')}")
+            print(f"   - total keys: {len(db_fields)}")
+
             # Add base fields
             db_fields.update({
                 'user_id': user_id,
@@ -613,7 +626,13 @@ class DatabaseManager:
             logger.debug("Final values prepared for insert:")
             for k, v in db_fields.items():
                 logger.debug(f"  - {k}: {v}")
-
+            
+            # RENDER DEBUG 7: Pre-SQL check
+            print(f"🔍 FINAL DB_FIELDS (key samples):")
+            for key in ['user_id', 'language', 'calories', 'protein_g', 'dish_name']:
+                value = db_fields.get(key)
+                print(f"   - {key}: {value} (type: {type(value)})")
+            
             # Execute the insert query
             sql = """
             INSERT INTO nutrition_analysis (
@@ -656,9 +675,15 @@ class DatabaseManager:
             if 'conn' in locals() and conn:
                 conn.rollback()
             return False
+            
     def _extract_fields_for_db(self, nutrition_data: dict, language: str) -> dict:
         """Extract and flatten all DB-relevant fields from nutrition_data"""
-    
+        
+        # RENDER DEBUG 3: Input check
+        print(f"🔍 EXTRACT_FIELDS INPUT:")
+        print(f"   - language param: '{language}'")
+        print(f"   - nutrition_data type: {type(nutrition_data)}")
+        print(f"   - is_food: {nutrition_data.get('is_food') if isinstance(nutrition_data, dict) else 'N/A'}")
         # Helper functions
         def safe_truncate(value, max_length, field_name="unknown"):
             if value is None:
@@ -671,8 +696,18 @@ class DatabaseManager:
 
         def safe_numeric(value, default=None):
             try:
+                if value is None:
+                    return default
+                # Handle localized numbers - remove non-numeric chars except decimal
+                import re
+                if isinstance(value, str):
+                    clean_value = re.sub(r'[^\d.-]', '', str(value))
+                    if not clean_value or clean_value == '-':
+                        return default
+                    value = clean_value
                 return float(value) if '.' in str(value) else int(value)
             except (ValueError, TypeError):
+                print(f"⚠️ safe_numeric failed on: {value} (type: {type(value)})")
                 return default
 
         def safe_boolean(value, default=None):
@@ -706,8 +741,10 @@ class DatabaseManager:
             'cooking_modifications': [], 'nutritional_additions': [], 'ingredients_identified': [],
             'cooking_method': None, 'meal_category': None
         }
+        print(f"🔍 INITIAL LANGUAGE FIELD: '{fields['language']}'")
 
         if not nutrition_data or not isinstance(nutrition_data, dict) or not nutrition_data.get('is_food', True):
+            print("🔍 RETURNING DEFAULT FIELDS (no food data)")
             return fields
 
         try:
@@ -725,6 +762,7 @@ class DatabaseManager:
 
             # Extract nutrition facts
             nutrition_facts = nutrition_data.get('nutrition_facts', {})
+            print(f"🔍 NUTRITION_FACTS RAW: {nutrition_facts}")
             for key in ['calories', 'protein_g', 'carbohydrates_g', 'fat_g', 'fiber_g', 'sugar_g', 'sodium_mg', 'saturated_fat_g']:
                 fields[key] = safe_numeric(nutrition_facts.get(key))
         
@@ -1324,13 +1362,23 @@ class NutritionAnalyzer:
         try:
             response = self.model.generate_content([enhanced_prompt, image])
             json_response = response.text.strip()
+            
+            print(f"🔍 RAW GEMINI RESPONSE (first 200 chars): {json_response[:200]}")
+            print(f"🔍 RESPONSE TYPE: {type(json_response)}")
 
             # Clean the response to ensure it's valid JSON
             json_response = self._clean_json_response(json_response)
+            
+            print(f"🔍 CLEANED RESPONSE (first 200 chars): {json_response[:200]}")
 
             # Parse JSON
             nutrition_data = json.loads(json_response)
-        
+            print(f"🔍 PARSED DATA TYPE: {type(nutrition_data)}")
+            print(f"🔍 PARSED DATA KEYS: {list(nutrition_data.keys()) if isinstance(nutrition_data, dict) else 'NOT A DICT'}")
+            
+            if isinstance(nutrition_data, dict) and 'nutrition_facts' in nutrition_data:
+                print(f"🔍 NUTRITION FACTS: {nutrition_data['nutrition_facts']}")
+
             # Check if it's a food image
             if not nutrition_data.get('is_food', True):
                 # Handle non-food image
@@ -1343,13 +1391,13 @@ class NutritionAnalyzer:
             return user_message, nutrition_data
 
         except json.JSONDecodeError as e:
-            logger.error(f"JSON parsing error: {e}")
-            logger.error(f"Raw response: {response.text}")
+            print(f"❌ JSON DECODE ERROR: {e}")
+            print(f"❌ FAILED ON TEXT: {json_response}")
             # Fallback to original method or simple message
             return self._handle_json_error(language), {}
 
         except Exception as e:
-            logger.error(f"Gemini analysis error: {e}")
+            print(f"❌ GENERAL ERROR: {e}")
             return self._get_error_message(language), {}
                     
     def _create_non_food_message(self, response_data: dict, language: str) -> str:
