@@ -1428,8 +1428,9 @@ class NutritionAnalyzer:
     def _create_user_message(self, nutrition_data: dict, language: str) -> str:
         """Create a formatted user message from parsed JSON data - REFACTORED VERSION"""
         try:
+            db = DatabaseManager()
             # Extract structured data using the same helper
-            fields = self._extract_fields_for_db(nutrition_data, language)
+            fields = db._extract_fields_for_db(nutrition_data, language)
         
             # Language-specific emojis and formatting
             message_parts = []
