@@ -1904,11 +1904,11 @@ def handle_image_message(message: Dict[str, Any]):
                 logger.info(f"Analyzed: {dish_name}, Calories: {calories}, Health Score: {health_score}")
             
             # Save analysis with comprehensive nutrient details
-            save_nutrition_analysis(
+            success = db_manager.save_nutrition_analysis(
                 user_id=user['user_id'],
                 file_location=file_location,
                 analysis_result=user_message,
-                language=language,
+                language=user_language,
                 nutrition_data=nutrition_json
             )
             
@@ -2260,11 +2260,11 @@ def handle_11za_media_message(sender: str, content: Dict[str, Any]):
                 logger.info(f"Analyzed: {dish_name}, Calories: {calories}, Health Score: {health_score}")
             
             # Save analysis with comprehensive nutrient details
-            save_nutrition_analysis(
+            success = db_manager.save_nutrition_analysis(
                 user_id=user['user_id'],
                 file_location=file_location,
                 analysis_result=user_message,
-                language=language,
+                language=user_language,
                 nutrition_data=nutrition_json
             )
             
