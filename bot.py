@@ -1904,11 +1904,12 @@ def handle_image_message(message: Dict[str, Any]):
                 logger.info(f"Analyzed: {dish_name}, Calories: {calories}, Health Score: {health_score}")
             
             # Save analysis with comprehensive nutrient details
-            success = db_manager.save_nutrition_analysis(
-                user['user_id'], 
-                file_location, 
-                user_message,  # The formatted message for display
-                json.dumps(nutrition_json) if nutrition_json else "{}"  # # Convert dict to JSON string
+            save_nutrition_analysis(
+                user_id=user['user_id'],
+                file_location=file_location,
+                analysis_result=user_message,
+                language=language,
+                nutrition_data=nutrition_json
             )
             
             if not success:
@@ -2259,11 +2260,12 @@ def handle_11za_media_message(sender: str, content: Dict[str, Any]):
                 logger.info(f"Analyzed: {dish_name}, Calories: {calories}, Health Score: {health_score}")
             
             # Save analysis with comprehensive nutrient details
-            success = db_manager.save_nutrition_analysis(
-                user['user_id'], 
-                file_location, 
-                user_message,  # The formatted message for display
-                json.dumps(nutrition_json) if nutrition_json else "{}"  # The complete structured data
+            save_nutrition_analysis(
+                user_id=user['user_id'],
+                file_location=file_location,
+                analysis_result=user_message,
+                language=language,
+                nutrition_data=nutrition_json
             )
             
             if not success:
