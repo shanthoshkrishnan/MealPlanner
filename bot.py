@@ -656,7 +656,118 @@ class DatabaseManager:
             if 'conn' in locals() and conn:
                 conn.rollback()
             return False
+    def _extract_fields_for_db(self, nutrition_data: dict, language: str) -> dict:
+        """Extract and flatten all DB-relevant fields from nutrition_data"""
+    
+        # Helper functions
+        def safe_truncate(value, max_length, field_name="unknown"):
+            if value is None:
+                return None
+            str_value = str(value)
+            if len(str_value) > max_length:
+                logger.warning(f"Truncating {field_name}: {len(str_value)} chars to {max_length}")
+                return str_value[:max_length]
+            return str_value
 
+        def safe_numeric(value, default=None):
+            try:
+                return float(value) if '.' in str(value) else int(value)
+            except (ValueError, TypeError):
+                return default
+
+        def safe_boolean(value, default=None):
+            if value is None:
+                return default
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                return value.lower() in ('true', '1', 'yes', 'on')
+            return bool(value)
+
+        def safe_array(value, default=None):
+            if value is None:
+                return default or []
+            if isinstance(value, list):
+                return [str(item) for item in value if item is not None]
+            return [str(value)] if value else []
+
+        # Initialize with defaults
+        fields = {
+            'language': language,  # Use the language parameter directly
+            'dish_name': None, 'cuisine_type': None, 'confidence_level': None, 'dish_description': None,
+            'estimated_weight_grams': None, 'serving_description': None,
+            'calories': None, 'protein_g': None, 'carbohydrates_g': None, 'fat_g': None,
+            'fiber_g': None, 'sugar_g': None, 'sodium_mg': None, 'saturated_fat_g': None,
+            'key_vitamins': [], 'key_minerals': [], 'health_score': None, 'health_grade': None,
+            'nutritional_strengths': [], 'areas_of_concern': [], 'overall_assessment': None,
+            'potential_allergens': [], 'is_vegetarian': None, 'is_vegan': None,
+            'is_gluten_free': None, 'is_dairy_free': None, 'is_keto_friendly': None, 'is_low_sodium': None,
+            'healthier_alternatives': [], 'portion_recommendations': None,
+            'cooking_modifications': [], 'nutritional_additions': [], 'ingredients_identified': [],
+            'cooking_method': None, 'meal_category': None
+        }
+
+        if not nutrition_data or not isinstance(nutrition_data, dict) or not nutrition_data.get('is_food', True):
+            return fields
+
+        try:
+            # Extract dish identification
+            dish_info = nutrition_data.get('dish_identification', {})
+            fields['dish_name'] = safe_truncate(dish_info.get('name'), 200, 'dish_name')
+            fields['cuisine_type'] = safe_truncate(dish_info.get('cuisine_type'), 100, 'cuisine_type')
+            fields['confidence_level'] = safe_truncate(dish_info.get('confidence_level'), 50, 'confidence_level')
+            fields['dish_description'] = safe_truncate(dish_info.get('description'), 2000, 'dish_description')
+
+            # Extract serving info
+            serving_info = nutrition_data.get('serving_info', {})
+            fields['estimated_weight_grams'] = safe_numeric(serving_info.get('estimated_weight_grams'))
+            fields['serving_description'] = safe_truncate(serving_info.get('serving_description'), 200, 'serving_description')
+
+            # Extract nutrition facts
+            nutrition_facts = nutrition_data.get('nutrition_facts', {})
+            for key in ['calories', 'protein_g', 'carbohydrates_g', 'fat_g', 'fiber_g', 'sugar_g', 'sodium_mg', 'saturated_fat_g']:
+                fields[key] = safe_numeric(nutrition_facts.get(key))
+        
+            fields['key_vitamins'] = safe_array(nutrition_facts.get('key_vitamins'))
+            fields['key_minerals'] = safe_array(nutrition_facts.get('key_minerals'))
+
+            # Extract health analysis
+            health_analysis = nutrition_data.get('health_analysis', {})
+            fields['health_score'] = safe_numeric(health_analysis.get('health_score'))
+            fields['health_grade'] = safe_truncate(health_analysis.get('health_grade'), 10, 'health_grade')
+            fields['nutritional_strengths'] = safe_array(health_analysis.get('nutritional_strengths'))
+            fields['areas_of_concern'] = safe_array(health_analysis.get('areas_of_concern'))
+            fields['overall_assessment'] = safe_truncate(health_analysis.get('overall_assessment'), 2000, 'overall_assessment')
+
+            # Extract dietary information
+            dietary_info = nutrition_data.get('dietary_information', {})
+            fields['potential_allergens'] = safe_array(dietary_info.get('potential_allergens'))
+        
+            # Extract dietary compatibility flags
+            compatibility = dietary_info.get('dietary_compatibility', {})
+            for flag in ['vegetarian', 'vegan', 'gluten_free', 'dairy_free', 'keto_friendly', 'low_sodium']:
+                fields[f'is_{flag}'] = safe_boolean(compatibility.get(flag))
+
+            # Extract improvement suggestions
+            improvements = nutrition_data.get('improvement_suggestions', {})
+            fields['healthier_alternatives'] = safe_array(improvements.get('healthier_alternatives'))
+            fields['portion_recommendations'] = safe_truncate(improvements.get('portion_recommendations'), 1000, 'portion_recommendations')
+            fields['cooking_modifications'] = safe_array(improvements.get('cooking_modifications'))
+            fields['nutritional_additions'] = safe_array(improvements.get('nutritional_additions'))
+
+            # Extract detailed breakdown
+            breakdown = nutrition_data.get('detailed_breakdown', {})
+            fields['ingredients_identified'] = safe_array(breakdown.get('ingredients_identified'))
+            fields['cooking_method'] = safe_truncate(breakdown.get('cooking_method'), 100, 'cooking_method')
+            fields['meal_category'] = safe_truncate(breakdown.get('meal_category'), 50, 'meal_category')
+
+            logger.debug("Successfully extracted fields for DB")
+            return fields
+
+        except Exception as e:
+            logger.error(f"Error extracting fields for DB: {e}")
+            return fields
+            
     def get_user_stats(self, user_id: int) -> Dict:
         """Get user analysis statistics using user_id"""
         try:
@@ -1240,119 +1351,7 @@ class NutritionAnalyzer:
         except Exception as e:
             logger.error(f"Gemini analysis error: {e}")
             return self._get_error_message(language), {}
-            
-    def _extract_fields_for_db(self, nutrition_data: dict, language: str) -> dict:
-        """Extract and flatten all DB-relevant fields from nutrition_data"""
-    
-        # Helper functions
-        def safe_truncate(value, max_length, field_name="unknown"):
-            if value is None:
-                return None
-            str_value = str(value)
-            if len(str_value) > max_length:
-                logger.warning(f"Truncating {field_name}: {len(str_value)} chars to {max_length}")
-                return str_value[:max_length]
-            return str_value
-
-        def safe_numeric(value, default=None):
-            try:
-                return float(value) if '.' in str(value) else int(value)
-            except (ValueError, TypeError):
-                return default
-
-        def safe_boolean(value, default=None):
-            if value is None:
-                return default
-            if isinstance(value, bool):
-                return value
-            if isinstance(value, str):
-                return value.lower() in ('true', '1', 'yes', 'on')
-            return bool(value)
-
-        def safe_array(value, default=None):
-            if value is None:
-                return default or []
-            if isinstance(value, list):
-                return [str(item) for item in value if item is not None]
-            return [str(value)] if value else []
-
-        # Initialize with defaults
-        fields = {
-            'language': language,  # Use the language parameter directly
-            'dish_name': None, 'cuisine_type': None, 'confidence_level': None, 'dish_description': None,
-            'estimated_weight_grams': None, 'serving_description': None,
-            'calories': None, 'protein_g': None, 'carbohydrates_g': None, 'fat_g': None,
-            'fiber_g': None, 'sugar_g': None, 'sodium_mg': None, 'saturated_fat_g': None,
-            'key_vitamins': [], 'key_minerals': [], 'health_score': None, 'health_grade': None,
-            'nutritional_strengths': [], 'areas_of_concern': [], 'overall_assessment': None,
-            'potential_allergens': [], 'is_vegetarian': None, 'is_vegan': None,
-            'is_gluten_free': None, 'is_dairy_free': None, 'is_keto_friendly': None, 'is_low_sodium': None,
-            'healthier_alternatives': [], 'portion_recommendations': None,
-            'cooking_modifications': [], 'nutritional_additions': [], 'ingredients_identified': [],
-            'cooking_method': None, 'meal_category': None
-        }
-
-        if not nutrition_data or not isinstance(nutrition_data, dict) or not nutrition_data.get('is_food', True):
-            return fields
-
-        try:
-            # Extract dish identification
-            dish_info = nutrition_data.get('dish_identification', {})
-            fields['dish_name'] = safe_truncate(dish_info.get('name'), 200, 'dish_name')
-            fields['cuisine_type'] = safe_truncate(dish_info.get('cuisine_type'), 100, 'cuisine_type')
-            fields['confidence_level'] = safe_truncate(dish_info.get('confidence_level'), 50, 'confidence_level')
-            fields['dish_description'] = safe_truncate(dish_info.get('description'), 2000, 'dish_description')
-
-            # Extract serving info
-            serving_info = nutrition_data.get('serving_info', {})
-            fields['estimated_weight_grams'] = safe_numeric(serving_info.get('estimated_weight_grams'))
-            fields['serving_description'] = safe_truncate(serving_info.get('serving_description'), 200, 'serving_description')
-
-            # Extract nutrition facts
-            nutrition_facts = nutrition_data.get('nutrition_facts', {})
-            for key in ['calories', 'protein_g', 'carbohydrates_g', 'fat_g', 'fiber_g', 'sugar_g', 'sodium_mg', 'saturated_fat_g']:
-                fields[key] = safe_numeric(nutrition_facts.get(key))
-        
-            fields['key_vitamins'] = safe_array(nutrition_facts.get('key_vitamins'))
-            fields['key_minerals'] = safe_array(nutrition_facts.get('key_minerals'))
-
-            # Extract health analysis
-            health_analysis = nutrition_data.get('health_analysis', {})
-            fields['health_score'] = safe_numeric(health_analysis.get('health_score'))
-            fields['health_grade'] = safe_truncate(health_analysis.get('health_grade'), 10, 'health_grade')
-            fields['nutritional_strengths'] = safe_array(health_analysis.get('nutritional_strengths'))
-            fields['areas_of_concern'] = safe_array(health_analysis.get('areas_of_concern'))
-            fields['overall_assessment'] = safe_truncate(health_analysis.get('overall_assessment'), 2000, 'overall_assessment')
-
-            # Extract dietary information
-            dietary_info = nutrition_data.get('dietary_information', {})
-            fields['potential_allergens'] = safe_array(dietary_info.get('potential_allergens'))
-        
-            # Extract dietary compatibility flags
-            compatibility = dietary_info.get('dietary_compatibility', {})
-            for flag in ['vegetarian', 'vegan', 'gluten_free', 'dairy_free', 'keto_friendly', 'low_sodium']:
-                fields[f'is_{flag}'] = safe_boolean(compatibility.get(flag))
-
-            # Extract improvement suggestions
-            improvements = nutrition_data.get('improvement_suggestions', {})
-            fields['healthier_alternatives'] = safe_array(improvements.get('healthier_alternatives'))
-            fields['portion_recommendations'] = safe_truncate(improvements.get('portion_recommendations'), 1000, 'portion_recommendations')
-            fields['cooking_modifications'] = safe_array(improvements.get('cooking_modifications'))
-            fields['nutritional_additions'] = safe_array(improvements.get('nutritional_additions'))
-
-            # Extract detailed breakdown
-            breakdown = nutrition_data.get('detailed_breakdown', {})
-            fields['ingredients_identified'] = safe_array(breakdown.get('ingredients_identified'))
-            fields['cooking_method'] = safe_truncate(breakdown.get('cooking_method'), 100, 'cooking_method')
-            fields['meal_category'] = safe_truncate(breakdown.get('meal_category'), 50, 'meal_category')
-
-            logger.debug("Successfully extracted fields for DB")
-            return fields
-
-        except Exception as e:
-            logger.error(f"Error extracting fields for DB: {e}")
-            return fields
-            
+                    
     def _create_non_food_message(self, response_data: dict, language: str) -> str:
         """Create message for non-food images"""
         try:
